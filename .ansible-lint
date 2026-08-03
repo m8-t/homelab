@@ -1,0 +1,17 @@
+---
+profile: moderate
+
+exclude_paths:
+  - .cache/
+  - .venv/
+  - gitops/
+  - provisioning/
+  - ansible/sealed-secrets/
+  - ansible/group_vars/all/secrets.yml
+  - tls.yaml
+  - tls.yml
+
+skip_list:
+  - yaml[line-length]
+
+use_default_rules: true

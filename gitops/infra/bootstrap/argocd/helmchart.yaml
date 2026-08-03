@@ -1,0 +1,114 @@
+---
+apiVersion: helm.cattle.io/v1
+kind: HelmChart
+metadata:
+  name: argocd
+  namespace: kube-system
+spec:
+  repo: https://argoproj.github.io/argo-helm
+  chart: argo-cd
+  version: "10.2.2"
+  targetNamespace: argocd
+  createNamespace: true
+  valuesContent: |-
+    configs:
+      params:
+        server.insecure: true
+        hydrator.enabled: "true"
+        controller.log.level: warn
+        server.log.level: warn
+        reposerver.log.level: warn
+      cm:
+        accounts.claude: apiKey
+        kustomize.buildOptions: --enable-helm
+      rbac:
+        policy.default: ''
+        policy.csv: |
+          p, role:claude-sync, applications, get, */*, allow
+          p, role:claude-sync, applications, sync, */*, allow
+          g, claude, role:claude-sync
+    global:
+      nodeSelector:
+        m8t.io/storage: sd
+    server:
+      nodeSelector:
+        kubernetes.io/hostname: node3
+      metrics:
+        enabled: true
+        serviceMonitor:
+          enabled: true
+      resources:
+        requests:
+          cpu: 50m
+          memory: 256Mi
+        limits:
+          memory: 512Mi
+    controller:
+      nodeSelector:
+        kubernetes.io/hostname: node4
+      metrics:
+        enabled: true
+        serviceMonitor:
+          enabled: true
+      resources:
+        requests:
+          cpu: 50m
+          memory: 512Mi
+        limits:
+          memory: 1280Mi
+    repoServer:
+      nodeSelector:
+        kubernetes.io/hostname: node4
+      metrics:
+        enabled: true
+        serviceMonitor:
+          enabled: true
+      resources:
+        requests:
+          cpu: 50m
+          memory: 256Mi
+        limits:
+          memory: 512Mi
+    applicationSet:
+      nodeSelector:
+        kubernetes.io/hostname: node3
+      metrics:
+        enabled: true
+        serviceMonitor:
+          enabled: true
+      resources:
+        requests:
+          cpu: 20m
+          memory: 64Mi
+        limits:
+          memory: 128Mi
+    dex:
+      nodeSelector:
+        kubernetes.io/hostname: node3
+      resources:
+        requests:
+          cpu: 10m
+          memory: 32Mi
+        limits:
+          memory: 128Mi
+    redis:
+      nodeSelector:
+        kubernetes.io/hostname: node3
+      resources:
+        requests:
+          cpu: 10m
+          memory: 16Mi
+        limits:
+          memory: 64Mi
+    commitServer:
+      enabled: true
+      nodeSelector:
+        kubernetes.io/hostname: node3
+      resources:
+        requests:
+          cpu: 10m
+          memory: 64Mi
+        limits:
+          memory: 256Mi
+    notifications:
+      enabled: false

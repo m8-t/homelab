@@ -1,0 +1,55 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended"
+  ],
+  "prHourlyLimit": 0,
+  "packageRules": [
+    {
+      "description": "Keep Linkwarden PostgreSQL on major 16",
+      "matchDatasources": ["docker"],
+      "matchPackageNames": ["postgres"],
+      "matchFileNames": ["gitops/vps/infra/linkwarden/postgres.yaml"],
+      "allowedVersions": "/^16\\./"
+    }
+  ],
+  "kubernetes": {
+    "managerFilePatterns": ["/gitops/infra/homelab/.+\\.yaml$/", "/gitops/dry/.+\\.yaml$/", "/gitops/vps/infra/.+\\.yaml$/"]
+  },
+  "argocd": {
+    "managerFilePatterns": ["/gitops/apps/.+\\.yaml$/", "/gitops/vps/apps/.+\\.yaml$/"]
+  },
+  "customManagers": [
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/gitops/infra/.+/helmchart\\.yaml$/"],
+      "matchStrings": [
+        "repo:\\s*(?<registryUrl>https?://[^\\s]+)[\\s\\S]*?chart:\\s*(?<depName>[^\\s]+)[\\s\\S]*?version:\\s*\"?(?<currentValue>[^\"\\s]+)\"?"
+      ],
+      "datasourceTemplate": "helm"
+    },
+    // Image tags pinned in Application helm values (valuesObject) -- the
+    // argocd manager only tracks chart versions, not container image tags
+    // (missed vaultwarden 1.36.0, see 2026-07-03 incident follow-ups).
+    // Matches optional `registry:` + `repository:` + `tag:` triples.
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/gitops/apps/.+\\.yaml$/"],
+      "matchStrings": [
+        "(?:registry:\\s*(?<packagePrefix>[^\\s]+)\\n\\s*)?repository:\\s*(?<packageSuffix>[^\\s]+)\\n\\s*tag:\\s*\"?(?<currentValue>[^\"\\s]+)\"?"
+      ],
+      "packageNameTemplate": "{{#if packagePrefix}}{{packagePrefix}}/{{/if}}{{packageSuffix}}",
+      "datasourceTemplate": "docker"
+    },
+    // Tag-only pins (chart supplies the repository) need an explicit hint
+    // comment directly above the tag line:  # renovate: docker=<image>
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/gitops/apps/.+\\.yaml$/"],
+      "matchStrings": [
+        "# renovate: docker=(?<depName>[^\\s]+)\\n\\s*tag:\\s*\"?(?<currentValue>[^\"\\s]+)\"?"
+      ],
+      "datasourceTemplate": "docker"
+    }
+  ]
+}

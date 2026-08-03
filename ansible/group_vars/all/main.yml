@@ -1,0 +1,18 @@
+---
+local_kubeconfig_path: "{{ lookup('env', 'HOME') }}/.kube/homelab-config"
+
+server_ip: "172.16.20.80"
+
+metallb_ingress_ip_pool: "172.16.20.110-172.16.20.120"
+metallb_adguard_ip: "172.16.20.70"
+
+gateway_ip: "172.16.20.110"
+
+argocd_hostname: "argocd.m8t.io"
+
+acme_email: "acme@m8t.io"
+acme_env: "prod"
+acme_server: "https://acme-v02.api.letsencrypt.org/directory"
+
+nfs_server: "172.16.20.5"
+nfs_path: "/k3s"

@@ -1,0 +1,52 @@
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: envoy-gateway
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+spec:
+  project: homelab
+  sources:
+    # OCI chart -- requires docker.io registered as Helm OCI repo in ArgoCD
+    - repoURL: docker.io/envoyproxy
+      chart: gateway-helm
+      targetRevision: 1.8.3
+      helm:
+        # CRDs come from the envoy-gateway-crds app (wave 0), which adopted
+        # them on first sync
+        skipCrds: true
+        values: |
+          # safe-upgrades VAP pair is owned by the envoy-gateway-crds app
+          crds:
+            gatewayAPI:
+              safeUpgradePolicy:
+                enabled: false
+          deployment:
+            envoyGateway:
+              resources:
+                requests:
+                  cpu: 100m
+                  memory: 256Mi
+                limits:
+                  memory: 512Mi
+    - repoURL: https://gitlab.com/dan361/homelab-ops.git
+      targetRevision: main
+      path: gitops/infra/homelab/envoy-gateway
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: envoy-gateway-system
+  syncPolicy:
+    retry:
+      limit: 10
+      backoff:
+        duration: 30s
+        factor: 2
+        maxDuration: 10m
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true

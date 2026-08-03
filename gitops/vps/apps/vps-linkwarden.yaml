@@ -1,0 +1,51 @@
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: vps-linkwarden
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "3"
+spec:
+  project: vps
+  sources:
+    - repoURL: https://meilisearch.github.io/meilisearch-kubernetes
+      chart: meilisearch
+      targetRevision: 0.36.0
+      helm:
+        releaseName: meilisearch
+        valuesObject:
+          image:
+            tag: v1.12.8
+          environment:
+            MEILI_ENV: production
+          auth:
+            existingMasterKeySecret: linkwarden-meilisearch
+          persistence:
+            enabled: true
+            size: 2Gi
+            storageClass: local-path
+          resources:
+            requests:
+              cpu: 25m
+              memory: 128Mi
+            limits:
+              memory: 512Mi
+    - repoURL: https://gitlab.com/dan361/homelab-ops.git
+      targetRevision: main
+      path: gitops/vps/infra/linkwarden
+  destination:
+    server: https://10.99.0.1:6443
+    namespace: linkwarden
+  syncPolicy:
+    retry:
+      limit: 10
+      backoff:
+        duration: 30s
+        factor: 2
+        maxDuration: 10m
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true

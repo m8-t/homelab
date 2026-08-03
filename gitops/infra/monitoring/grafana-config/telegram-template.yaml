@@ -1,0 +1,25 @@
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-telegram-template
+  namespace: monitoring
+  labels:
+    grafana_alert: "1"
+data:
+  telegram-template.yaml: |
+    apiVersion: 1
+    templates:
+      - orgId: 1
+        name: telegram
+        template: |
+          {{ define "telegram" }}
+          {{ range .Alerts }}
+          {{ if eq .Status "firing" }}🔴{{ else }}🟢{{ end }} <b>{{ .Labels.alertname }}</b>
+          {{ .Annotations.summary }}
+          {{ if .Labels.cluster }}Cluster: <code>{{ .Labels.cluster }}</code>
+          {{ end -}}
+          Severity: <code>{{ .Labels.severity }}</code>
+          Status: <code>{{ .Status }}</code>
+          {{ end }}
+          {{ end }}

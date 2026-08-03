@@ -1,0 +1,259 @@
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: kube-prometheus-stack
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "4"
+spec:
+  project: monitoring
+  source:
+    repoURL: https://prometheus-community.github.io/helm-charts
+    chart: kube-prometheus-stack
+    targetRevision: 88.1.3
+    helm:
+      valuesObject:
+        # Grafana stays standalone (has Loki datasource + alert rules wired
+        # to Telegram). Alertmanager stays off (we alert via Grafana).
+        alertmanager:
+          enabled: false
+        grafana:
+          enabled: false
+
+        # node-exporter + kube-state-metrics: stack deploys them with proper
+        # ServiceMonitors so the Prometheus CR scrapes them automatically.
+        nodeExporter:
+          enabled: true
+        kubeStateMetrics:
+          enabled: true
+        prometheus-node-exporter:
+          resources:
+            requests:
+              cpu: 10m
+              memory: 20Mi
+            limits:
+              memory: 50Mi
+          extraArgs:
+            - --collector.filesystem.mount-points-exclude=^/(dev|proc|sys|var/lib/docker/.+|var/lib/kubelet/.+|run/k3s/.+)($|/)
+            - --collector.textfile.directory=/var/lib/node_exporter/textfile
+          extraHostVolumeMounts:
+            - name: textfile
+              hostPath: /var/lib/node_exporter/textfile
+              mountPath: /var/lib/node_exporter/textfile
+              readOnly: true
+        kube-state-metrics:
+          resources:
+            requests:
+              cpu: 10m
+              memory: 50Mi
+            limits:
+              memory: 128Mi
+
+        # Default rules target kube-controller-manager/scheduler/etcd as
+        # separate services (not the k3s model) and we alert via Grafana.
+        defaultRules:
+          create: false
+
+        # k3s runs apiserver/controller-manager/scheduler/etcd/kubelet in one
+        # process with a shared Prometheus registry -- any single /metrics
+        # endpoint returns the full set. Kubelet ServiceMonitor alone captures
+        # everything; enabling the others would duplicate series.
+        kubeApiServer:
+          enabled: false
+        kubeControllerManager:
+          enabled: false
+        kubeScheduler:
+          enabled: false
+        kubeProxy:
+          enabled: false
+        kubeEtcd:
+          enabled: false
+
+        kubelet:
+          enabled: true
+        coreDns:
+          enabled: true
+
+        prometheusOperator:
+          resources:
+            requests:
+              cpu: 10m
+              memory: 50Mi
+            limits:
+              memory: 200Mi
+
+        prometheus:
+          prometheusSpec:
+            retention: 14d
+            retentionSize: 15GB
+            scrapeInterval: 30s
+            evaluationInterval: 30s
+            secrets:
+              - vps-scrape-creds
+            additionalScrapeConfigs:
+              - job_name: vps-kubelet
+                scrape_interval: 60s
+                scrape_timeout: 45s
+                kubernetes_sd_configs:
+                  - role: node
+                    api_server: https://10.99.0.1:6443
+                    tls_config:
+                      ca_file: /etc/prometheus/secrets/vps-scrape-creds/ca.crt
+                    authorization:
+                      credentials_file: /etc/prometheus/secrets/vps-scrape-creds/token
+                relabel_configs:
+                  - source_labels: [__meta_kubernetes_node_name]
+                    action: keep
+                    regex: .+
+                  - target_label: __address__
+                    replacement: 10.99.0.1:6443
+                  - source_labels: [__meta_kubernetes_node_name]
+                    target_label: __metrics_path__
+                    replacement: /api/v1/nodes/${1}/proxy/metrics
+                  - target_label: __scheme__
+                    replacement: https
+                  - target_label: cluster
+                    replacement: vps
+                tls_config:
+                  ca_file: /etc/prometheus/secrets/vps-scrape-creds/ca.crt
+                authorization:
+                  credentials_file: /etc/prometheus/secrets/vps-scrape-creds/token
+              - job_name: vps-cadvisor
+                scrape_interval: 60s
+                scrape_timeout: 45s
+                kubernetes_sd_configs:
+                  - role: node
+                    api_server: https://10.99.0.1:6443
+                    tls_config:
+                      ca_file: /etc/prometheus/secrets/vps-scrape-creds/ca.crt
+                    authorization:
+                      credentials_file: /etc/prometheus/secrets/vps-scrape-creds/token
+                relabel_configs:
+                  - source_labels: [__meta_kubernetes_node_name]
+                    action: keep
+                    regex: .+
+                  - target_label: __address__
+                    replacement: 10.99.0.1:6443
+                  - source_labels: [__meta_kubernetes_node_name]
+                    target_label: __metrics_path__
+                    replacement: /api/v1/nodes/${1}/proxy/metrics/cadvisor
+                  - target_label: __scheme__
+                    replacement: https
+                  - target_label: cluster
+                    replacement: vps
+                tls_config:
+                  ca_file: /etc/prometheus/secrets/vps-scrape-creds/ca.crt
+                authorization:
+                  credentials_file: /etc/prometheus/secrets/vps-scrape-creds/token
+              - job_name: vps-node-exporter
+                scrape_interval: 60s
+                scrape_timeout: 45s
+                kubernetes_sd_configs:
+                  - role: pod
+                    api_server: https://10.99.0.1:6443
+                    tls_config:
+                      ca_file: /etc/prometheus/secrets/vps-scrape-creds/ca.crt
+                    authorization:
+                      credentials_file: /etc/prometheus/secrets/vps-scrape-creds/token
+                relabel_configs:
+                  - source_labels: [__meta_kubernetes_namespace]
+                    action: keep
+                    regex: monitoring
+                  - source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_name]
+                    action: keep
+                    regex: prometheus-node-exporter
+                  - target_label: __address__
+                    replacement: 10.99.0.1:6443
+                  - source_labels: [__meta_kubernetes_pod_name]
+                    target_label: __metrics_path__
+                    replacement: /api/v1/namespaces/monitoring/pods/${1}:9100/proxy/metrics
+                  - target_label: __scheme__
+                    replacement: https
+                  - target_label: cluster
+                    replacement: vps
+                tls_config:
+                  ca_file: /etc/prometheus/secrets/vps-scrape-creds/ca.crt
+                authorization:
+                  credentials_file: /etc/prometheus/secrets/vps-scrape-creds/token
+              - job_name: vps-kube-state-metrics
+                scrape_interval: 60s
+                scrape_timeout: 45s
+                kubernetes_sd_configs:
+                  - role: service
+                    api_server: https://10.99.0.1:6443
+                    tls_config:
+                      ca_file: /etc/prometheus/secrets/vps-scrape-creds/ca.crt
+                    authorization:
+                      credentials_file: /etc/prometheus/secrets/vps-scrape-creds/token
+                relabel_configs:
+                  - source_labels: [__meta_kubernetes_namespace]
+                    action: keep
+                    regex: monitoring
+                  - source_labels: [__meta_kubernetes_service_label_app_kubernetes_io_name]
+                    action: keep
+                    regex: kube-state-metrics
+                  - target_label: __address__
+                    replacement: 10.99.0.1:6443
+                  - source_labels: [__meta_kubernetes_service_name]
+                    target_label: __metrics_path__
+                    replacement: /api/v1/namespaces/monitoring/services/${1}:8080/proxy/metrics
+                  - target_label: __scheme__
+                    replacement: https
+                  - target_label: cluster
+                    replacement: vps
+                tls_config:
+                  ca_file: /etc/prometheus/secrets/vps-scrape-creds/ca.crt
+                authorization:
+                  credentials_file: /etc/prometheus/secrets/vps-scrape-creds/token
+              - job_name: vps-forgejo
+                scrape_interval: 60s
+                scrape_timeout: 45s
+                static_configs:
+                  - targets: [forge.m8t.io]
+                    labels:
+                      cluster: vps
+                scheme: https
+                metrics_path: /metrics
+                authorization:
+                  credentials_file: /etc/prometheus/secrets/vps-scrape-creds/forgejo-token
+            nodeSelector:
+              kubernetes.io/hostname: node3
+            resources:
+              requests:
+                cpu: 100m
+                memory: 512Mi
+              limits:
+                memory: 1Gi
+            # Discover user-created ServiceMonitors/PodMonitors/PrometheusRules
+            # across all namespaces instead of only those with the stack's
+            # release label.
+            serviceMonitorSelectorNilUsesHelmValues: false
+            podMonitorSelectorNilUsesHelmValues: false
+            ruleSelectorNilUsesHelmValues: false
+            probeSelectorNilUsesHelmValues: false
+            scrapeConfigSelectorNilUsesHelmValues: false
+            storageSpec:
+              volumeClaimTemplate:
+                spec:
+                  storageClassName: local-path
+                  accessModes: ["ReadWriteOnce"]
+                  resources:
+                    requests:
+                      storage: 20Gi
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: monitoring
+  syncPolicy:
+    retry:
+      limit: 10
+      backoff:
+        duration: 30s
+        factor: 2
+        maxDuration: 10m
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true

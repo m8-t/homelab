@@ -1,0 +1,105 @@
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: vaultwarden
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "3"
+spec:
+  project: homelab
+  sources:
+    - repoURL: https://charts.gabe565.com
+      chart: vaultwarden
+      targetRevision: 0.16.1
+      helm:
+        valuesObject:
+          image:
+            repository: ghcr.io/dani-garcia/vaultwarden
+            tag: 1.37.1-alpine
+          podSecurityContext:
+            seccompProfile:
+              type: RuntimeDefault
+          securityContext:
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          resources:
+            requests:
+              cpu: 5m
+              memory: 192Mi
+            limits:
+              memory: 384Mi
+          env:
+            DOMAIN: https://vaultwarden.m8t.io
+            LOG_LEVEL: warn
+          nodeSelector:
+            m8t.io/storage: sd
+          ingress:
+            main:
+              enabled: false
+          persistence:
+            data:
+              enabled: true
+              storageClass: nfs
+              size: 5Gi
+              accessMode: ReadWriteOnce
+            tmp:
+              enabled: true
+              type: emptyDir
+              mountPath: /tmp
+          postgresql:
+            enabled: true
+            auth:
+              database: vaultwarden
+              existingSecret: vaultwarden-postgresql
+              secretKeys:
+                adminPasswordKey: postgres-password
+            image:
+              registry: docker.io
+              repository: bitnamilegacy/postgresql
+              tag: 17.6.0-debian-12-r4
+            volumePermissions:
+              enabled: true
+              image:
+                registry: docker.io
+                repository: bitnamilegacy/os-shell
+                tag: 12-debian-12-r51
+            primary:
+              resources:
+                requests:
+                  cpu: 10m
+                  memory: 128Mi
+                limits:
+                  memory: 256Mi
+              nodeSelector:
+                m8t.io/storage: sd
+              networkPolicy:
+                enabled: false
+              persistence:
+                enabled: true
+                storageClass: nfs
+                size: 8Gi
+            readReplicas:
+              networkPolicy:
+                enabled: false
+    - repoURL: https://gitlab.com/dan361/homelab-ops.git
+      targetRevision: main
+      path: gitops/infra/homelab/vaultwarden
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: vaultwarden
+  syncPolicy:
+    retry:
+      limit: 10
+      backoff:
+        duration: 30s
+        factor: 2
+        maxDuration: 10m
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true

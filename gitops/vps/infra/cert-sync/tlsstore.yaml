@@ -1,0 +1,11 @@
+---
+# Makes the synced wildcard cert the default cert for k3s Traefik, so every
+# HTTPS route (forge.m8t.io, linkwarden.m8t.io) serves it with no per-route config.
+apiVersion: traefik.io/v1alpha1
+kind: TLSStore
+metadata:
+  name: default
+  namespace: kube-system
+spec:
+  defaultCertificate:
+    secretName: wildcard-tls

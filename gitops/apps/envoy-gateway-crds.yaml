@@ -1,0 +1,42 @@
+---
+# CRDs split from the envoy-gateway app so HTTPRoute-bearing apps (wave 3)
+# never race the Gateway API / Envoy Gateway CRDs (2026-07-03 incident
+# follow-up). The main envoy-gateway app sets skipCrds accordingly.
+# targetRevision must stay in lockstep with gitops/apps/envoy-gateway.yaml.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: envoy-gateway-crds
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+spec:
+  project: homelab
+  source:
+    repoURL: docker.io/envoyproxy
+    chart: gateway-crds-helm
+    targetRevision: 1.8.3
+    helm:
+      # chart renders nothing unless these are enabled explicitly
+      values: |
+        crds:
+          gatewayAPI:
+            enabled: true
+          envoyGateway:
+            enabled: true
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: envoy-gateway-system
+  syncPolicy:
+    retry:
+      limit: 10
+      backoff:
+        duration: 30s
+        factor: 2
+        maxDuration: 10m
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true

@@ -1,0 +1,256 @@
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-alerts-infra
+  namespace: monitoring
+  labels:
+    grafana_alert: "1"
+data:
+  infra-alerts.yaml: |
+    apiVersion: 1
+    groups:
+      - orgId: 1
+        name: infra-alerts
+        folder: Alerts
+        interval: 1m
+        rules:
+          - uid: velero-schedule-missed
+            title: Velero Backup Schedule Missed
+            noDataState: Alerting
+            condition: B
+            data:
+              - refId: A
+                relativeTimeRange:
+                  from: 300
+                  to: 0
+                datasourceUid: prometheus
+                model:
+                  expr: '(time() - velero_backup_last_successful_timestamp{schedule!=""}) / 3600'
+                  instant: true
+                  refId: A
+              - refId: B
+                datasourceUid: __expr__
+                model:
+                  type: threshold
+                  expression: A
+                  conditions:
+                    - evaluator:
+                        type: gt
+                        params: [26]
+                  refId: B
+            for: 5m
+            labels:
+              severity: critical
+            annotations:
+              summary: 'Velero schedule {{ $labels.schedule }} has not completed in >26h'
+
+          - uid: etcd-offsite-stale
+            title: Etcd Offsite Snapshot Sync Stale
+            noDataState: Alerting
+            condition: B
+            data:
+              - refId: A
+                relativeTimeRange:
+                  from: 300
+                  to: 0
+                datasourceUid: prometheus
+                model:
+                  expr: '(time() - kube_cronjob_status_last_successful_time{cronjob="etcd-snapshot-offsite"}) / 3600'
+                  instant: true
+                  refId: A
+              - refId: B
+                datasourceUid: __expr__
+                model:
+                  type: threshold
+                  expression: A
+                  conditions:
+                    - evaluator:
+                        type: gt
+                        params: [26]
+                  refId: B
+            for: 5m
+            labels:
+              severity: critical
+            annotations:
+              summary: 'etcd-snapshot-offsite has not synced to m8t-etcd in >26h'
+
+          - uid: etcd-nas-stale
+            title: Etcd NAS Snapshot Sync Stale
+            noDataState: Alerting
+            condition: B
+            data:
+              - refId: A
+                relativeTimeRange:
+                  from: 300
+                  to: 0
+                datasourceUid: prometheus
+                model:
+                  expr: '(time() - kube_cronjob_status_last_successful_time{cronjob="etcd-snapshot-nas-sync"}) / 3600'
+                  instant: true
+                  refId: A
+              - refId: B
+                datasourceUid: __expr__
+                model:
+                  type: threshold
+                  expression: A
+                  conditions:
+                    - evaluator:
+                        type: gt
+                        params: [26]
+                  refId: B
+            for: 5m
+            labels:
+              severity: critical
+            annotations:
+              summary: 'etcd-snapshot-nas-sync has not synced to the NAS in >26h'
+
+          - uid: etcd-offsite-job-failed
+            title: Etcd Offsite Snapshot Job Failed
+            noDataState: OK
+            condition: B
+            data:
+              - refId: A
+                relativeTimeRange:
+                  from: 300
+                  to: 0
+                datasourceUid: prometheus
+                model:
+                  expr: 'sum(kube_job_status_failed{namespace="etcd-offsite"})'
+                  instant: true
+                  refId: A
+              - refId: B
+                datasourceUid: __expr__
+                model:
+                  type: threshold
+                  expression: A
+                  conditions:
+                    - evaluator:
+                        type: gt
+                        params: [0]
+                  refId: B
+            for: 5m
+            labels:
+              severity: warning
+            annotations:
+              summary: 'etcd offsite snapshot job failed -- check job logs in etcd-offsite namespace'
+
+          - uid: pvc-nearly-full
+            title: PVC Nearly Full
+            noDataState: OK
+            condition: B
+            data:
+              - refId: A
+                relativeTimeRange:
+                  from: 300
+                  to: 0
+                datasourceUid: prometheus
+                model:
+                  expr: 'kubelet_volume_stats_used_bytes / kubelet_volume_stats_capacity_bytes'
+                  instant: true
+                  refId: A
+              - refId: B
+                datasourceUid: __expr__
+                model:
+                  type: threshold
+                  expression: A
+                  conditions:
+                    - evaluator:
+                        type: gt
+                        params: [0.85]
+                  refId: B
+            for: 10m
+            labels:
+              severity: warning
+            annotations:
+              summary: 'PVC {{ $labels.persistentvolumeclaim }} in {{ $labels.namespace }} is >85% full'
+
+          - uid: argocd-out-of-sync
+            title: ArgoCD App Out of Sync
+            noDataState: OK
+            condition: B
+            data:
+              - refId: A
+                relativeTimeRange:
+                  from: 300
+                  to: 0
+                datasourceUid: prometheus
+                model:
+                  expr: 'argocd_app_info{sync_status!="Synced"}'
+                  instant: true
+                  refId: A
+              - refId: B
+                datasourceUid: __expr__
+                model:
+                  type: threshold
+                  expression: A
+                  conditions:
+                    - evaluator:
+                        type: gt
+                        params: [0]
+                  refId: B
+            for: 15m
+            labels:
+              severity: warning
+            annotations:
+              summary: 'ArgoCD app {{ $labels.name }} is {{ $labels.sync_status }}'
+
+          - uid: argocd-unhealthy
+            title: ArgoCD App Unhealthy
+            noDataState: OK
+            condition: B
+            data:
+              - refId: A
+                relativeTimeRange:
+                  from: 300
+                  to: 0
+                datasourceUid: prometheus
+                model:
+                  expr: 'argocd_app_info{health_status!~"Healthy|Progressing"}'
+                  instant: true
+                  refId: A
+              - refId: B
+                datasourceUid: __expr__
+                model:
+                  type: threshold
+                  expression: A
+                  conditions:
+                    - evaluator:
+                        type: gt
+                        params: [0]
+                  refId: B
+            for: 15m
+            labels:
+              severity: warning
+            annotations:
+              summary: 'ArgoCD app {{ $labels.name }} is {{ $labels.health_status }}'
+
+          - uid: pod-stuck-pending
+            title: Pod Stuck Pending
+            noDataState: OK
+            condition: B
+            data:
+              - refId: A
+                relativeTimeRange:
+                  from: 300
+                  to: 0
+                datasourceUid: prometheus
+                model:
+                  expr: 'kube_pod_status_phase{phase="Pending"}'
+                  instant: true
+                  refId: A
+              - refId: B
+                datasourceUid: __expr__
+                model:
+                  type: threshold
+                  expression: A
+                  conditions:
+                    - evaluator:
+                        type: gt
+                        params: [0]
+                  refId: B
+            for: 10m
+            labels:
+              severity: warning
+            annotations:
+              summary: 'Pod {{ $labels.namespace }}/{{ $labels.pod }} stuck in Pending for >10m'

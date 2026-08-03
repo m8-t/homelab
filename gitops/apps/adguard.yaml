@@ -1,0 +1,135 @@
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: adguard-home
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "3"
+spec:
+  project: homelab
+  sources:
+    - chart: adguard-home
+      repoURL: https://charts.gabe565.com
+      targetRevision: 0.3.25
+      helm:
+        valuesObject:
+          podAnnotations:
+            reloader.stakater.com/auto: "true"
+          image:
+            # renovate: docker=adguard/adguardhome
+            tag: v0.107.78
+          podSecurityContext:
+            seccompProfile:
+              type: RuntimeDefault
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+              add: [NET_BIND_SERVICE]
+          resources:
+            requests:
+              cpu: 64m
+              memory: 192Mi
+            limits:
+              memory: 512Mi
+          env:
+            TZ: Europe/Berlin
+          service:
+            main:
+              ports:
+                http:
+                  port: 3000
+            dns-tcp:
+              enabled: true
+              type: LoadBalancer
+              loadBalancerIP: 172.16.20.70
+              externalTrafficPolicy: Local
+              annotations:
+                metallb.io/allow-shared-ip: adguard-dns
+              ports:
+                dns-tcp:
+                  enabled: true
+                  port: 53
+                dns-over-tls:
+                  enabled: false
+                  port: 853
+            dns-udp:
+              enabled: true
+              type: LoadBalancer
+              loadBalancerIP: 172.16.20.70
+              externalTrafficPolicy: Local
+              annotations:
+                metallb.io/allow-shared-ip: adguard-dns
+              ports:
+                dns-udp:
+                  enabled: true
+                  protocol: UDP
+                  port: 53
+                dns-over-quic:
+                  enabled: false
+                  protocol: UDP
+                  port: 784
+          ingress:
+            main:
+              enabled: false
+          persistence:
+            config:
+              enabled: true
+              mountPath: /opt/adguardhome/conf
+              size: 1Gi
+              accessMode: ReadWriteOnce
+              storageClass: "nfs"
+            data:
+              enabled: true
+              mountPath: /opt/adguardhome/work
+              size: 20Gi
+              accessMode: ReadWriteOnce
+              storageClass: "nfs"
+            adguard-config-source:
+              enabled: true
+              type: secret
+              name: adguard-home-config
+              mountPath: /config-source
+              readOnly: true
+            tmp:
+              enabled: true
+              type: emptyDir
+              mountPath: /tmp
+          initContainers:
+            enforce-config:
+              image: alpine
+              imagePullPolicy: IfNotPresent
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: [ALL]
+              command:
+                - sh
+                - -c
+                - cp -v /config-source/AdGuardHome.yaml /opt/adguardhome/conf/AdGuardHome.yaml
+              volumeMounts:
+                - name: adguard-config-source
+                  mountPath: /config-source
+                - name: config
+                  mountPath: /opt/adguardhome/conf
+        releaseName: adguard-home
+    - repoURL: https://gitlab.com/dan361/homelab-ops.git
+      targetRevision: main
+      path: gitops/infra/homelab/adguard
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: adguard
+  syncPolicy:
+    retry:
+      limit: 10
+      backoff:
+        duration: 30s
+        factor: 2
+        maxDuration: 10m
+    automated:
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true

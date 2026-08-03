@@ -1,0 +1,110 @@
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-alerts-services
+  namespace: monitoring
+  labels:
+    grafana_alert: "1"
+data:
+  service-alerts.yaml: |
+    apiVersion: 1
+    groups:
+      - orgId: 1
+        name: service-alerts
+        folder: Alerts
+        interval: 1m
+        rules:
+          - uid: vaultwarden-down
+            title: Vaultwarden Down
+            noDataState: Alerting
+            condition: B
+            data:
+              - refId: A
+                relativeTimeRange:
+                  from: 300
+                  to: 0
+                datasourceUid: prometheus
+                model:
+                  expr: 'kube_deployment_status_replicas_available{deployment="vaultwarden", namespace="vaultwarden"}'
+                  instant: true
+                  refId: A
+              - refId: B
+                datasourceUid: __expr__
+                model:
+                  type: threshold
+                  expression: A
+                  conditions:
+                    - evaluator:
+                        type: lt
+                        params: [1]
+                  refId: B
+            for: 5m
+            labels:
+              severity: critical
+            annotations:
+              summary: 'Vaultwarden has no available replicas'
+
+          - uid: music-assistant-down
+            title: Music Assistant Down
+            noDataState: Alerting
+            condition: B
+            data:
+              - refId: A
+                relativeTimeRange:
+                  from: 300
+                  to: 0
+                datasourceUid: prometheus
+                model:
+                  expr: 'kube_deployment_status_replicas_available{deployment="music-assistant", namespace="music-assistant"}'
+                  instant: true
+                  refId: A
+              - refId: B
+                datasourceUid: __expr__
+                model:
+                  type: threshold
+                  expression: A
+                  conditions:
+                    - evaluator:
+                        type: lt
+                        params: [1]
+                  refId: B
+            for: 5m
+            labels:
+              severity: critical
+            annotations:
+              summary: 'Music Assistant has no available replicas'
+
+          - uid: adguard-down
+            title: AdGuard Down
+            noDataState: Alerting
+            condition: B
+            data:
+              - refId: A
+                relativeTimeRange:
+                  from: 300
+                  to: 0
+                datasourceUid: prometheus
+                model:
+                  expr: 'kube_deployment_status_replicas_available{deployment="adguard-home", namespace="adguard"}'
+                  instant: true
+                  refId: A
+              - refId: B
+                datasourceUid: __expr__
+                model:
+                  type: threshold
+                  expression: A
+                  conditions:
+                    - evaluator:
+                        type: lt
+                        params: [1]
+                  refId: B
+            for: 2m
+            labels:
+              severity: critical
+            annotations:
+              summary: 'AdGuard DNS has no available replicas'
+
+    deleteRules:
+      - orgId: 1
+        uid: navidrome-down
