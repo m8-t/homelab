@@ -1,0 +1,90 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: yamtrack
+  namespace: yamtrack
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: yamtrack
+  template:
+    metadata:
+      labels:
+        app: yamtrack
+    spec:
+      securityContext:
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: yamtrack
+          image: ghcr.io/fuzzygrim/yamtrack:0.26.1
+          # Yamtrack must run as root with a writable root filesystem. The upstream entrypoint.sh runs groupmod, usermod, and chown before
+          # supervisord, which runs as root; nginx and gunicorn write under /var/log/nginx, /var/lib/nginx/body, /tmp/nginx.pid, and
+          # /tmp/gunicorn.ctl.
+          env:
+            - name: TZ
+              value: Europe/Berlin
+            - name: PUID
+              value: "1000"
+            - name: PGID
+              value: "1000"
+            - name: REDIS_URL
+              value: redis://yamtrack-redis:6379
+            - name: DB_HOST
+              value: yamtrack-postgres
+            - name: DB_PORT
+              value: "5432"
+            - name: DB_NAME
+              value: yamtrack
+            - name: DB_USER
+              value: yamtrack
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: yamtrack-postgres
+                  key: password
+            - name: URLS
+              value: https://yamtrack.m8t.io
+            # Registration closed; the accounts already exist. Flip to "True" temporarily to add another user.
+            - name: REGISTRATION
+              value: "False"
+            - name: SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: yamtrack
+                  key: SECRET
+          resources:
+            requests:
+              cpu: 50m
+              memory: 384Mi
+            limits:
+              memory: 1Gi
+          ports:
+            - name: http
+              containerPort: 8000
+          startupProbe:
+            httpGet:
+              path: /health/
+              port: http
+            periodSeconds: 15
+            timeoutSeconds: 10
+            failureThreshold: 20
+          readinessProbe:
+            httpGet:
+              path: /health/
+              port: http
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 3
+          # Use TCP instead of /health/: that endpoint pings Celery, so a busy worker could restart the web container in a loop.
+          livenessProbe:
+            tcpSocket:
+              port: http
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 5

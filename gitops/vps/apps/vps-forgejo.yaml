@@ -1,0 +1,91 @@
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: vps-forgejo
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "4"
+spec:
+  project: vps
+  sources:
+    - repoURL: code.forgejo.org/forgejo-helm
+      chart: forgejo
+      targetRevision: 17.1.4
+      helm:
+        releaseName: forgejo
+        valuesObject:
+          replicaCount: 1
+          service:
+            http:
+              type: ClusterIP
+              port: 3000
+            ssh:
+              type: LoadBalancer
+              port: 2222
+          ingress:
+            enabled: false
+          persistence:
+            enabled: true
+            size: 10Gi
+            storageClass: local-path
+          extraVolumes:
+            - name: forgejo-staging
+              persistentVolumeClaim:
+                claimName: forgejo-staging
+          extraContainerVolumeMounts:
+            - name: forgejo-staging
+              mountPath: /staging
+          gitea:
+            podAnnotations:
+              pre.hook.backup.velero.io/container: forgejo
+              pre.hook.backup.velero.io/command: >-
+                ["sh", "-c", "forgejo dump -c /data/gitea/conf/app.ini
+                --file /staging/forgejo-dump.zip --type zip"]
+              pre.hook.backup.velero.io/on-error: Fail
+              backup.velero.io/backup-volumes: forgejo-staging,data
+            admin:
+              existingSecret: forgejo-admin
+              email: forgejo@m8t.io
+              passwordMode: keepUpdated
+            config:
+              server:
+                ROOT_URL: https://forge.m8t.io
+                SSH_DOMAIN: forge.m8t.io
+                SSH_PORT: 2222
+              service:
+                DISABLE_REGISTRATION: true
+              actions:
+                ENABLED: true
+              metrics:
+                ENABLED: true
+            additionalConfigFromEnvs:
+              - name: GITEA__metrics__TOKEN
+                valueFrom:
+                  secretKeyRef:
+                    name: forgejo-metrics
+                    key: token
+          resources:
+            requests:
+              cpu: 128m
+              memory: 128Mi
+            limits:
+              memory: 512Mi
+    - repoURL: https://gitlab.com/dan361/homelab-ops.git
+      targetRevision: main
+      path: gitops/vps/infra/forgejo
+  destination:
+    server: https://10.99.0.1:6443
+    namespace: forgejo
+  syncPolicy:
+    retry:
+      limit: 10
+      backoff:
+        duration: 30s
+        factor: 2
+        maxDuration: 10m
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true

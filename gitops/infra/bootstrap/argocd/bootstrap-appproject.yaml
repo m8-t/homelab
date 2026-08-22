@@ -1,0 +1,32 @@
+---
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: bootstrap
+  namespace: argocd
+spec:
+  description: Bootstrap-critical infrastructure (ArgoCD, Sealed Secrets)
+  sourceRepos:
+    - https://gitlab.com/dan361/homelab-ops.git
+  destinations:
+    - server: https://kubernetes.default.svc
+      namespace: kube-system
+    - server: https://kubernetes.default.svc
+      namespace: argocd
+    - server: https://kubernetes.default.svc
+      namespace: envoy-gateway-system
+  namespaceResourceWhitelist:
+    - group: helm.cattle.io
+      kind: HelmChart
+    - group: argoproj.io
+      kind: AppProject
+    - group: ""
+      kind: ConfigMap
+    - group: ""
+      kind: Secret
+    - group: bitnami.com
+      kind: SealedSecret
+    - group: gateway.networking.k8s.io
+      kind: HTTPRoute
+    - group: cert-manager.io
+      kind: Certificate

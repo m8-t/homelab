@@ -1,0 +1,33 @@
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: heartbeat
+  namespace: monitoring
+spec:
+  schedule: "*/2 * * * *"
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: heartbeat
+              image: curlimages/curl:8.21.0
+              command:
+                - /bin/sh
+                - -c
+                - 'curl -fsS --retry 3 "$HEARTBEAT_URL"'
+              env:
+                - name: HEARTBEAT_URL
+                  valueFrom:
+                    secretKeyRef:
+                      name: heartbeat-url
+                      key: url
+              resources:
+                requests:
+                  cpu: 5m
+                  memory: 8Mi
+                limits:
+                  cpu: 50m
+                  memory: 32Mi

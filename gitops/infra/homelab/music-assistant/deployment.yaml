@@ -1,0 +1,69 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: music-assistant
+  namespace: music-assistant
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: music-assistant
+  template:
+    metadata:
+      labels:
+        app: music-assistant
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: node4
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      securityContext:
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: music-assistant
+          # fork build: adds WiiM remote next/previous -> MA queue handling
+          # source: github.com/m8-t/music-assistant-server @ feat/wiim-remote-transport
+          image: ghcr.io/m8-t/music-assistant-server:2.9.13-wiim-remote@sha256:00bc27dac29536dee3e41b16a15a6bca1f2dce516f9a4ff56cf99319c57fae14
+          securityContext:
+            capabilities:
+              drop: [ALL]
+              add: [NET_ADMIN, NET_RAW]
+          env:
+            # keep the huggingface model cache on the data PVC; without this the
+            # Sonic Analysis CLAP model is re-fetched from huggingface.co on every restart
+            - name: HF_HOME
+              value: /data/.cache/huggingface
+            # Smart Fades pulls its beat-tracking checkpoint through torch.hub,
+            # which caches under $HOME/.cache/torch and is lost on every restart
+            - name: TORCH_HOME
+              value: /data/.cache/torch
+          resources:
+            requests:
+              cpu: 50m
+              memory: 256Mi
+            limits:
+              memory: 6Gi
+          ports:
+            - name: http
+              containerPort: 8095
+            - name: stream
+              containerPort: 8097
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: music
+              mountPath: /media
+              readOnly: true
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: music-assistant-data
+        - name: music
+          persistentVolumeClaim:
+            claimName: music-assistant-music
+            readOnly: true

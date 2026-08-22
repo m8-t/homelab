@@ -1,0 +1,91 @@
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: vps-velero
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "5"
+spec:
+  project: vps
+  sources:
+    - repoURL: https://vmware-tanzu.github.io/helm-charts
+      chart: velero
+      targetRevision: 12.1.0
+      helm:
+        valuesObject:
+          initContainers:
+            - name: velero-plugin-for-aws
+              image: velero/velero-plugin-for-aws:v1.14.0
+              imagePullPolicy: IfNotPresent
+              volumeMounts:
+                - mountPath: /target
+                  name: plugins
+
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 250m
+              memory: 256Mi
+
+          credentials:
+            useSecret: false
+
+          configuration:
+            backupStorageLocation:
+              - name: hetzner
+                provider: aws
+                bucket: m8t-vps
+                default: true
+                credential:
+                  name: velero-credentials-hetzner
+                  key: cloud
+                config:
+                  region: nbg1
+                  s3ForcePathStyle: "true"
+                  s3Url: https://nbg1.your-objectstorage.com
+                  customerKeyEncryptionSecret: "velero-sse-c-key/key"
+
+          snapshotsEnabled: false
+          deployNodeAgent: true
+
+          nodeAgent:
+            resources:
+              requests:
+                cpu: 50m
+                memory: 64Mi
+              limits:
+                cpu: 250m
+                memory: 256Mi
+
+          schedules:
+            daily-hetzner:
+              disabled: false
+              schedule: "0 3 * * *"
+              template:
+                ttl: "720h"
+                storageLocation: hetzner
+                includedNamespaces:
+                  - linkwarden
+                  - forgejo
+
+    - repoURL: https://gitlab.com/dan361/homelab-ops.git
+      targetRevision: main
+      path: gitops/vps/infra/velero
+  destination:
+    server: https://10.99.0.1:6443
+    namespace: velero
+  syncPolicy:
+    retry:
+      limit: 10
+      backoff:
+        duration: 30s
+        factor: 2
+        maxDuration: 10m
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true

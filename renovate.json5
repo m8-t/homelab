@@ -1,0 +1,96 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended"
+  ],
+  "prHourlyLimit": 0,
+  "prConcurrentLimit": 0,
+  "platformAutomerge": true,
+  "packageRules": [
+    {
+      "description": "Keep Linkwarden PostgreSQL on major 16",
+      "matchDatasources": ["docker"],
+      "matchPackageNames": ["postgres"],
+      "matchFileNames": ["gitops/vps/infra/linkwarden/postgres.yaml"],
+      "allowedVersions": "/^16\\./"
+    },
+    {
+      "description": "Keep Yamtrack PostgreSQL on major 17 -- a major bump needs a dump/restore, not an image swap",
+      "matchDatasources": ["docker"],
+      "matchPackageNames": ["postgres"],
+      "matchFileNames": ["gitops/infra/homelab/yamtrack/postgres.yaml"],
+      "allowedVersions": "/^17\\./"
+    },
+    {
+      "description": "Allowlist automerge for patch and minor updates on app workloads and monitoring stack. Unlisted paths stay manual by design.",
+      "matchFileNames": [
+        "gitops/apps/adguard.yaml",
+        "gitops/apps/alloy.yaml",
+        "gitops/apps/docs.yaml",
+        "gitops/apps/grafana.yaml",
+        "gitops/apps/kube-prometheus-stack.yaml",
+        "gitops/apps/loki.yaml",
+        "gitops/apps/music-assistant.yaml",
+        "gitops/apps/reloader.yaml",
+        "gitops/apps/rustfs.yaml",
+        "gitops/apps/trivy-operator.yaml",
+        "gitops/apps/vaultwarden.yaml",
+        "gitops/dry/headlamp/kustomization.yaml",
+        "gitops/infra/homelab/**",
+        "gitops/infra/monitoring/**",
+        "gitops/vps/apps/vps-forgejo.yaml",
+        "gitops/vps/apps/vps-linkwarden.yaml",
+        "gitops/vps/apps/vps-monitoring.yaml",
+        "gitops/vps/infra/forgejo/**",
+        "gitops/vps/infra/linkwarden/**",
+        "gitops/vps/infra/monitoring/**"
+      ],
+      "matchUpdateTypes": ["patch", "minor"],
+      "automerge": true
+    },
+    {
+      "description": "Major updates always reviewed by hand, repo-wide.",
+      "matchUpdateTypes": ["major"],
+      "automerge": false
+    }
+  ],
+  "kubernetes": {
+    "managerFilePatterns": ["/gitops/infra/homelab/.+\\.yaml$/", "/gitops/dry/.+\\.yaml$/", "/gitops/vps/infra/.+\\.yaml$/"]
+  },
+  "argocd": {
+    "managerFilePatterns": ["/gitops/apps/.+\\.yaml$/", "/gitops/vps/apps/.+\\.yaml$/"]
+  },
+  "customManagers": [
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/gitops/infra/.+/helmchart\\.yaml$/"],
+      "matchStrings": [
+        "repo:\\s*(?<registryUrl>https?://[^\\s]+)[\\s\\S]*?chart:\\s*(?<depName>[^\\s]+)[\\s\\S]*?version:\\s*\"?(?<currentValue>[^\"\\s]+)\"?"
+      ],
+      "datasourceTemplate": "helm"
+    },
+    // Image tags pinned in Application helm values (valuesObject) -- the
+    // argocd manager only tracks chart versions, not container image tags
+    // (missed vaultwarden 1.36.0, see 2026-07-03 incident follow-ups).
+    // Matches optional `registry:` + `repository:` + `tag:` triples.
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/gitops/apps/.+\\.yaml$/"],
+      "matchStrings": [
+        "(?:registry:\\s*(?<packagePrefix>[^\\s]+)\\n\\s*)?repository:\\s*(?<packageSuffix>[^\\s]+)\\n\\s*tag:\\s*\"?(?<currentValue>[^\"\\s]+)\"?"
+      ],
+      "packageNameTemplate": "{{#if packagePrefix}}{{packagePrefix}}/{{/if}}{{packageSuffix}}",
+      "datasourceTemplate": "docker"
+    },
+    // Tag-only pins (chart supplies the repository) need an explicit hint
+    // comment directly above the tag line:  # renovate: docker=<image>
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/gitops/apps/.+\\.yaml$/"],
+      "matchStrings": [
+        "# renovate: docker=(?<depName>[^\\s]+)\\n\\s*tag:\\s*\"?(?<currentValue>[^\"\\s]+)\"?"
+      ],
+      "datasourceTemplate": "docker"
+    }
+  ]
+}

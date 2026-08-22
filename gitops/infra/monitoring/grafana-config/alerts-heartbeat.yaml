@@ -1,0 +1,49 @@
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-alerts-heartbeat
+  namespace: monitoring
+  labels:
+    grafana_alert: "1"
+data:
+  heartbeat-alerts.yaml: |
+    apiVersion: 1
+    groups:
+      - orgId: 1
+        name: heartbeat
+        folder: Alerts
+        interval: 1m
+        rules:
+          # Always firing on purpose -- routed to the healthchecks.io webhook
+          # (severity=heartbeat), never to Telegram. Silence stops the pings
+          # and trips the external dead-man's switch.
+          - uid: heartbeat
+            title: Heartbeat
+            condition: B
+            noDataState: Alerting
+            data:
+              - refId: A
+                relativeTimeRange:
+                  from: 300
+                  to: 0
+                datasourceUid: prometheus
+                model:
+                  expr: 'vector(1)'
+                  instant: true
+                  refId: A
+              - refId: B
+                datasourceUid: __expr__
+                model:
+                  type: threshold
+                  expression: A
+                  conditions:
+                    - evaluator:
+                        type: gt
+                        params: [0]
+                  refId: B
+            for: 0s
+            labels:
+              severity: heartbeat
+            annotations:
+              summary: 'Grafana alerting pipeline heartbeat (expected to fire forever)'

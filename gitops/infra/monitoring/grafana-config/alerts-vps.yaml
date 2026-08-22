@@ -1,0 +1,167 @@
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-alerts-vps
+  namespace: monitoring
+  labels:
+    grafana_alert: "1"
+data:
+  vps-alerts.yaml: |
+    apiVersion: 1
+    groups:
+      - orgId: 1
+        name: vps-alerts
+        folder: Alerts
+        interval: 1m
+        rules:
+          - uid: vps-kubelet-unreachable
+            title: VPS kubelet unreachable
+            condition: B
+            # NoData = healthy (absent() empty) or Prometheus itself down.
+            # Neither should page; a real outage returns 1. Prometheus-down is
+            # covered by the independent VPS-side heartbeat.
+            noDataState: OK
+            data:
+              - refId: A
+                relativeTimeRange:
+                  from: 300
+                  to: 0
+                datasourceUid: prometheus
+                model:
+                  expr: 'absent(up{cluster="vps", job="vps-kubelet"})'
+                  instant: true
+                  refId: A
+              - refId: B
+                datasourceUid: __expr__
+                model:
+                  type: threshold
+                  expression: A
+                  conditions:
+                    - evaluator:
+                        type: gt
+                        params: [0]
+                  refId: B
+            for: 12m
+            labels:
+              severity: critical
+            annotations:
+              summary: VPS kubelet has been unreachable for 12 minutes
+
+          - uid: vps-high-memory
+            title: VPS High Memory Usage
+            condition: B
+            data:
+              - refId: A
+                relativeTimeRange:
+                  from: 300
+                  to: 0
+                datasourceUid: prometheus
+                model:
+                  expr: '(1 - node_memory_MemAvailable_bytes{cluster="vps"} / node_memory_MemTotal_bytes{cluster="vps"}) * 100'
+                  instant: true
+                  refId: A
+              - refId: B
+                datasourceUid: __expr__
+                model:
+                  type: threshold
+                  expression: A
+                  conditions:
+                    - evaluator:
+                        type: gt
+                        params: [95]
+                  refId: B
+            for: 15m
+            labels:
+              severity: warning
+            annotations:
+              summary: 'VPS memory usage above 95% on {{ $labels.instance }}'
+
+          - uid: vps-high-disk
+            title: VPS High Disk Usage
+            condition: B
+            data:
+              - refId: A
+                relativeTimeRange:
+                  from: 300
+                  to: 0
+                datasourceUid: prometheus
+                model:
+                  expr: >-
+                    (1 - node_filesystem_avail_bytes{cluster="vps",fstype="ext4",mountpoint="/"}
+                    / node_filesystem_size_bytes{cluster="vps",fstype="ext4",mountpoint="/"}) * 100
+                  instant: true
+                  refId: A
+              - refId: B
+                datasourceUid: __expr__
+                model:
+                  type: threshold
+                  expression: A
+                  conditions:
+                    - evaluator:
+                        type: gt
+                        params: [90]
+                  refId: B
+            for: 10m
+            labels:
+              severity: warning
+            annotations:
+              summary: 'VPS disk usage above 90% on {{ $labels.instance }}'
+
+          - uid: vps-high-cpu
+            title: VPS High CPU Usage
+            condition: B
+            data:
+              - refId: A
+                relativeTimeRange:
+                  from: 300
+                  to: 0
+                datasourceUid: prometheus
+                model:
+                  expr: '(1 - avg by(instance) (rate(node_cpu_seconds_total{mode="idle",cluster="vps"}[5m]))) * 100'
+                  instant: true
+                  refId: A
+              - refId: B
+                datasourceUid: __expr__
+                model:
+                  type: threshold
+                  expression: A
+                  conditions:
+                    - evaluator:
+                        type: gt
+                        params: [95]
+                  refId: B
+            for: 20m
+            labels:
+              severity: warning
+            annotations:
+              summary: 'VPS CPU usage above 95% on {{ $labels.instance }}'
+
+          - uid: vps-fs-readonly
+            title: VPS Filesystem Read-Only
+            condition: B
+            data:
+              - refId: A
+                relativeTimeRange:
+                  from: 300
+                  to: 0
+                datasourceUid: prometheus
+                model:
+                  expr: 'node_filesystem_readonly{cluster="vps",fstype="ext4",mountpoint="/"}'
+                  instant: true
+                  refId: A
+              - refId: B
+                datasourceUid: __expr__
+                model:
+                  type: threshold
+                  expression: A
+                  conditions:
+                    - evaluator:
+                        type: gt
+                        params: [0]
+                  refId: B
+            for: 5m
+            labels:
+              severity: critical
+            annotations:
+              summary: 'VPS root filesystem remounted read-only on {{ $labels.instance }}'

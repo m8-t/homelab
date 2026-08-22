@@ -1,0 +1,13 @@
+---
+# Generate a WireGuard config at mullvad.net/account/wireguard-config,
+# then fill in the values below. Private key goes in vault.yml.
+mullvad_address: "10.73.76.106/32"
+mullvad_address_v6: "fc00:bbbb:bbbb:bb01::a:4c69/128"
+mullvad_dns: "10.64.0.1"
+mullvad_peer_public_key: "kduYoE/b1mA2Pjszx1CzE4Lktsdc2zsUU8Relul2m2U="
+mullvad_endpoint: "194.127.199.2:51820"
+
+tinyproxy_port: 8888
+tinyproxy_allow: "172.16.20.0/24"
+lan_subnet: "172.16.20.0/24"
+node2_ip: "172.16.20.81"

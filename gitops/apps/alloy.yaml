@@ -1,0 +1,129 @@
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: alloy
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "5"
+spec:
+  project: monitoring
+  source:
+    repoURL: https://grafana.github.io/helm-charts
+    chart: alloy
+    targetRevision: 1.11.1
+    helm:
+      valuesObject:
+        alloy:
+          resources:
+            requests:
+              cpu: 10m
+              memory: 50Mi
+            limits:
+              memory: 300Mi
+          configMap:
+            content: |
+              discovery.kubernetes "pods" {
+                role = "pod"
+              }
+
+              discovery.relabel "pods" {
+                targets = discovery.kubernetes.pods.targets
+
+                rule {
+                  source_labels = ["__meta_kubernetes_namespace"]
+                  target_label  = "namespace"
+                }
+                rule {
+                  source_labels = ["__meta_kubernetes_pod_name"]
+                  target_label  = "pod"
+                }
+                rule {
+                  source_labels = ["__meta_kubernetes_pod_container_name"]
+                  target_label  = "container"
+                }
+                rule {
+                  source_labels = ["__meta_kubernetes_pod_label_app_kubernetes_io_name"]
+                  target_label  = "app"
+                }
+              }
+
+              loki.source.kubernetes "pods" {
+                targets    = discovery.relabel.pods.output
+                forward_to = [loki.write.default.receiver]
+              }
+
+              loki.write "default" {
+                endpoint {
+                  url = "http://loki.monitoring.svc:3100/loki/api/v1/push"
+                }
+              }
+
+              // Node journal (kernel + systemd units), warning and worse only.
+              // Earliest signal for dying storage: btrfs errno=-5 / read-only
+              // remounts appear here long before node_exporter metrics trip
+              // (2026-07-03 node1 incident follow-up).
+              loki.relabel "journal" {
+                forward_to = []
+
+                rule {
+                  source_labels = ["__journal__systemd_unit"]
+                  target_label  = "unit"
+                }
+                rule {
+                  source_labels = ["__journal__transport"]
+                  target_label  = "transport"
+                }
+                rule {
+                  source_labels = ["__journal__hostname"]
+                  target_label  = "hostname"
+                }
+                rule {
+                  source_labels = ["__journal_priority_keyword"]
+                  target_label  = "level"
+                }
+              }
+
+              loki.source.journal "system" {
+                path          = "/var/log/journal"
+                max_age       = "12h"
+                matches       = "PRIORITY=0 PRIORITY=1 PRIORITY=2 PRIORITY=3 PRIORITY=4"
+                relabel_rules = loki.relabel.journal.rules
+                labels        = { job = "journal" }
+                forward_to    = [loki.write.default.receiver]
+              }
+
+          mounts:
+            extra:
+              - name: journal
+                mountPath: /var/log/journal
+                readOnly: true
+              - name: machine-id
+                mountPath: /etc/machine-id
+                readOnly: true
+
+        controller:
+          type: daemonset
+          volumes:
+            extra:
+              - name: journal
+                hostPath:
+                  path: /var/log/journal
+              - name: machine-id
+                hostPath:
+                  path: /etc/machine-id
+                  type: File
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: monitoring
+  syncPolicy:
+    retry:
+      limit: 10
+      backoff:
+        duration: 30s
+        factor: 2
+        maxDuration: 10m
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions: []

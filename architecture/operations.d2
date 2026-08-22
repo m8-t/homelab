@@ -1,0 +1,128 @@
+vars: {
+  d2-config: {
+    layout-engine: dagre
+    theme-id: 4
+    dark-theme-id: 200
+    pad: 40
+    center: true
+    sketch: true
+  }
+}
+
+direction: down
+
+gitlab: "GitLab\nhomelab-ops" {
+  shape: cloud
+}
+letsencrypt: "Let's Encrypt" {
+  shape: cloud
+}
+ionos: "IONOS DNS API" {
+  shape: cloud
+}
+telegram: Telegram {
+  shape: cloud
+}
+healthchecks: healthchecks.io {
+  shape: cloud
+}
+
+hub: {
+  label: "Home k3s hub"
+  direction: down
+
+  argocd: "Argo CD"
+
+  tls: {
+    label: "TLS automation"
+    direction: right
+    cert-manager: cert-manager
+    wildcard: "wildcard-tls Secret"
+    eso: "External Secrets Operator\nPushSecret"
+  }
+
+  telemetry: {
+    label: "Observability"
+    direction: right
+    prometheus: Prometheus
+    grafana: "Grafana Unified Alerting"
+    alloy: "Alloy DaemonSet"
+    loki: Loki
+  }
+
+  recovery: {
+    label: "Recovery"
+    direction: right
+    etcd: "embedded etcd\ndaily snapshots"
+    velero: "Velero\nVaultwarden and Music Assistant"
+    rustfs: "RustFS · primary" {
+      shape: cylinder
+    }
+    nas: "NAS · snapshot mirror" {
+      shape: cylinder
+    }
+  }
+}
+
+spoke: {
+  label: "VPS k3s spoke"
+  direction: down
+
+  api: "k3s API\n10.99.0.1:6443"
+  wildcard: "wildcard-tls Secret"
+  tlsstore: TLSStore/default
+  exporters: "kubelet · cAdvisor\nnode-exporter · kube-state-metrics"
+  forgejo: "Forgejo /metrics"
+  velero: "VPS Velero\nForgejo and Linkwarden"
+  heartbeat: "VPS heartbeat CronJob"
+}
+
+hetzner: "Hetzner Object Storage\nm8t-k3s · m8t-etcd · m8t-vps" {
+  shape: cloud
+}
+
+gitlab -> hub.argocd: "desired state"
+hub.argocd -> hub.tls.cert-manager: "sync local apps"
+hub.argocd -> hub.tls.eso
+hub.argocd -> hub.recovery.velero
+hub.argocd -> spoke.api: "manage over WireGuard"
+
+hub.tls.cert-manager -> letsencrypt: ACME
+hub.tls.cert-manager -> ionos: "DNS01 challenge"
+hub.tls.cert-manager -> hub.tls.wildcard
+hub.tls.wildcard -> hub.tls.eso
+hub.tls.eso -> spoke.api: "push wildcard Secret"
+spoke.api -> spoke.wildcard
+spoke.wildcard -> spoke.tlsstore
+
+hub.telemetry.prometheus -> spoke.api: "remote scrape over WireGuard" {
+  style.stroke-dash: 6
+}
+spoke.api -> spoke.exporters: "node and service proxy" {
+  style.stroke-dash: 6
+}
+hub.telemetry.prometheus -> spoke.forgejo: "direct HTTPS scrape" {
+  style.stroke-dash: 6
+}
+hub.telemetry.prometheus -> hub.telemetry.grafana
+hub.telemetry.alloy -> hub.telemetry.loki
+hub.telemetry.loki -> hub.telemetry.grafana
+hub.telemetry.grafana -> telegram: alerts
+hub.telemetry.grafana -> healthchecks: "dead-man switch"
+spoke.heartbeat -> healthchecks: "independent heartbeat"
+
+hub.recovery.velero -> hub.recovery.rustfs: "daily kopia backup" {
+  style.stroke-width: 4
+}
+hub.recovery.velero -> hetzner: "daily SSE-C backup" {
+  style.stroke-width: 4
+}
+hub.recovery.etcd -> hub.recovery.nas: "rclone sync" {
+  style.stroke-width: 4
+}
+hub.recovery.etcd -> hetzner: "rclone crypt" {
+  style.stroke-width: 4
+}
+spoke.velero -> hetzner: "daily SSE-C backup" {
+  style.stroke-width: 4
+}

@@ -1,0 +1,72 @@
+---
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+helmCharts:
+  - name: headlamp
+    repo: https://kubernetes-sigs.github.io/headlamp
+    version: 0.44.0
+    releaseName: headlamp
+    namespace: kube-system
+    includeCRDs: true
+    valuesInline:
+      config:
+        pluginsDir: /build/plugins
+      resources:
+        requests:
+          cpu: 5m
+          memory: 64Mi
+        limits:
+          memory: 128Mi
+      args:
+        - "--in-cluster"
+      initContainers:
+        - name: trivy-plugin
+          image: ghcr.io/kubebeam/trivy-headlamp-plugin:v0.3.2
+          command:
+            - /bin/sh
+            - -c
+            - mkdir -p /build/plugins && cp -r /plugins/* /build/plugins/
+          volumeMounts:
+            - name: headlamp-plugins
+              mountPath: /build/plugins
+        - name: cert-manager-plugin
+          image: alpine
+          command:
+            - /bin/sh
+            - -c
+            - >-
+              wget -qO /tmp/plugin.tar.gz
+              https://github.com/headlamp-k8s/plugins/releases/download/cert-manager-0.1.0/headlamp-k8s-cert-manager-0.1.0.tar.gz
+              && mkdir -p /build/plugins
+              && tar -xzf /tmp/plugin.tar.gz -C /build/plugins
+          volumeMounts:
+            - name: headlamp-plugins
+              mountPath: /build/plugins
+      volumeMounts:
+        - name: headlamp-plugins
+          mountPath: /build/plugins
+      volumes:
+        - name: headlamp-plugins
+          emptyDir: {}
+      ingress:
+        enabled: false
+      httpRoute:
+        enabled: true
+        parentRefs:
+          - name: eg
+            namespace: envoy-gateway-system
+            sectionName: https
+        hostnames:
+          - headlamp.m8t.io
+        rules:
+          - matches:
+              - path:
+                  type: PathPrefix
+                  value: /
+            backendRefs:
+              - name: headlamp
+                port: 80
+
+resources:
+  - admin-token.yaml

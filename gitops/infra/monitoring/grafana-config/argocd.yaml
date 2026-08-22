@@ -1,0 +1,182 @@
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboard-argocd
+  namespace: monitoring
+  labels:
+    grafana_dashboard: "1"
+  annotations:
+    grafana_folder: Infrastructure
+data:
+  argocd.json: |
+    {
+      "title": "ArgoCD",
+      "uid": "homelab-argocd",
+      "timezone": "browser",
+      "refresh": "30s",
+      "time": { "from": "now-1h", "to": "now" },
+      "panels": [
+        {
+          "title": "Synced",
+          "type": "stat",
+          "gridPos": { "h": 4, "w": 4, "x": 0, "y": 0 },
+          "datasource": { "type": "prometheus" },
+          "fieldConfig": {
+            "defaults": {
+              "color": { "fixedColor": "green", "mode": "fixed" }
+            }
+          },
+          "targets": [
+            {
+              "expr": "count(argocd_app_info{sync_status=\"Synced\"})"
+            }
+          ]
+        },
+        {
+          "title": "Out of Sync",
+          "type": "stat",
+          "gridPos": { "h": 4, "w": 4, "x": 4, "y": 0 },
+          "datasource": { "type": "prometheus" },
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "thresholds" },
+              "thresholds": {
+                "steps": [
+                  { "color": "green", "value": null },
+                  { "color": "yellow", "value": 1 }
+                ]
+              }
+            }
+          },
+          "targets": [
+            {
+              "expr": "count(argocd_app_info{sync_status=\"OutOfSync\"}) or vector(0)"
+            }
+          ]
+        },
+        {
+          "title": "Healthy",
+          "type": "stat",
+          "gridPos": { "h": 4, "w": 4, "x": 8, "y": 0 },
+          "datasource": { "type": "prometheus" },
+          "fieldConfig": {
+            "defaults": {
+              "color": { "fixedColor": "green", "mode": "fixed" }
+            }
+          },
+          "targets": [
+            {
+              "expr": "count(argocd_app_info{health_status=\"Healthy\"})"
+            }
+          ]
+        },
+        {
+          "title": "Degraded",
+          "type": "stat",
+          "gridPos": { "h": 4, "w": 4, "x": 12, "y": 0 },
+          "datasource": { "type": "prometheus" },
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "thresholds" },
+              "thresholds": {
+                "steps": [
+                  { "color": "green", "value": null },
+                  { "color": "red", "value": 1 }
+                ]
+              }
+            }
+          },
+          "targets": [
+            {
+              "expr": "count(argocd_app_info{health_status=\"Degraded\"}) or vector(0)"
+            }
+          ]
+        },
+        {
+          "title": "Progressing",
+          "type": "stat",
+          "gridPos": { "h": 4, "w": 4, "x": 16, "y": 0 },
+          "datasource": { "type": "prometheus" },
+          "fieldConfig": {
+            "defaults": {
+              "color": { "fixedColor": "blue", "mode": "fixed" }
+            }
+          },
+          "targets": [
+            {
+              "expr": "count(argocd_app_info{health_status=\"Progressing\"}) or vector(0)"
+            }
+          ]
+        },
+        {
+          "title": "Sync Operations",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
+          "datasource": { "type": "prometheus" },
+          "fieldConfig": {
+            "defaults": {
+              "custom": { "fillOpacity": 10 }
+            }
+          },
+          "targets": [
+            {
+              "expr": "sum(increase(argocd_app_sync_total[5m])) by (phase)",
+              "legendFormat": "{{ phase }}"
+            }
+          ]
+        },
+        {
+          "title": "Sync Status by Project",
+          "type": "piechart",
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
+          "datasource": { "type": "prometheus" },
+          "targets": [
+            {
+              "expr": "count by (project, sync_status) (argocd_app_info)",
+              "legendFormat": "{{ project }}: {{ sync_status }}"
+            }
+          ]
+        },
+        {
+          "title": "Applications",
+          "type": "table",
+          "gridPos": { "h": 10, "w": 24, "x": 0, "y": 12 },
+          "datasource": { "type": "prometheus" },
+          "targets": [
+            {
+              "expr": "argocd_app_info",
+              "format": "table",
+              "instant": true
+            }
+          ],
+          "transformations": [
+            {
+              "id": "organize",
+              "options": {
+                "excludeByName": {
+                  "Time": true,
+                  "Value": true,
+                  "__name__": true,
+                  "instance": true,
+                  "job": true,
+                  "namespace": true,
+                  "operation": true,
+                  "service": true
+                },
+                "renameByName": {
+                  "dest_namespace": "Namespace",
+                  "dest_server": "Server",
+                  "health_status": "Health",
+                  "name": "Application",
+                  "project": "Project",
+                  "repo": "Repo",
+                  "sync_status": "Sync"
+                }
+              }
+            }
+          ]
+        }
+      ],
+      "schemaVersion": 39
+    }

@@ -1,0 +1,219 @@
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: grafana
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "5"
+spec:
+  project: monitoring
+  sources:
+    - repoURL: https://grafana-community.github.io/helm-charts
+      chart: grafana
+      targetRevision: 12.10.4
+      helm:
+        valuesObject:
+          resources:
+            requests:
+              cpu: 50m
+              memory: 256Mi
+            limits:
+              memory: 768Mi
+
+          readinessProbe:
+            timeoutSeconds: 3
+
+          admin:
+            existingSecret: grafana-admin
+            userKey: admin-user
+            passwordKey: admin-password
+
+          # Persistent storage for SQLite database. Prevents SQLITE_BUSY lock errors
+          # that fired spurious critical alerts and destroy service-account tokens on
+          # pod restart. local-path is node-local and unreplicated; losing node3 loses
+          # the DB, but datasources, dashboards, and alert rules are provisioned from git.
+          persistence:
+            enabled: true
+            type: pvc
+            storageClassName: local-path
+            accessModes:
+              - ReadWriteOnce
+            size: 2Gi
+
+          # Rolling updates deadlock with ReadWriteOnce local-path volumes; the new pod
+          # cannot mount while the old one holds the lease. Recreate strategy is mandatory.
+          deploymentStrategy:
+            type: Recreate
+
+          # Pin to node3 (SSD-backed local-path). node1 and node4 have microSD storage,
+          # unsuitable for SQLite fsync load (node1's microSD failed from k3s datastore
+          # writes in July 2026). Prometheus and Loki local-path already use node3's SSD.
+          nodeSelector:
+            kubernetes.io/hostname: node3
+
+          plugins:
+            - yesoreyeram-infinity-datasource
+
+          datasources:
+            datasources.yaml:
+              apiVersion: 1
+              datasources:
+                - name: Prometheus
+                  type: prometheus
+                  uid: prometheus
+                  url: http://kube-prometheus-stack-prometheus.monitoring.svc:9090
+                  isDefault: true
+                - name: Loki
+                  type: loki
+                  uid: loki
+                  url: http://loki.monitoring.svc:3100
+                - name: Infinity
+                  type: yesoreyeram-infinity-datasource
+                  url: https://api.mullvad.net/public/accounts/v1/$MULLVAD_ACCOUNT
+                  uid: infinity
+                  jsonData:
+                    allowedHosts:
+                      - https://api.mullvad.net
+
+          sidecar:
+            dashboards:
+              enabled: true
+              label: grafana_dashboard
+              labelValue: "1"
+              folderAnnotation: grafana_folder
+            alerts:
+              enabled: true
+              label: grafana_alert
+              labelValue: "1"
+
+          # File provider for dashboards fetched from grafana.com at pod start.
+          # Init container curls grafana.com/api/dashboards/<gnetId>/revisions/<rev>
+          # into /var/lib/grafana/dashboards/default.
+          dashboardProviders:
+            dashboardproviders.yaml:
+              apiVersion: 1
+              providers:
+                - name: default
+                  orgId: 1
+                  folder: ""
+                  type: file
+                  disableDeletion: false
+                  editable: true
+                  options:
+                    path: /var/lib/grafana/dashboards/default
+          dashboards:
+            default:
+              trivy-vulnerabilities:
+                gnetId: 16337
+                revision: 16
+                datasource: Prometheus
+              trivy-image-cve-data:
+                gnetId: 22010
+                revision: 2
+                # Uses object-form `{"uid": "${DS_PROMETHEUS}"}` across multiple
+                # lines -- the chart's default string-sed misses it. Rewrite the
+                # template variable to our datasource UID instead.
+                datasource:
+                  - name: DS_PROMETHEUS
+                    value: prometheus
+              node-exporter-full:
+                gnetId: 1860
+                revision: 45
+                datasource: Prometheus
+              coredns:
+                gnetId: 14981
+                revision: 2
+                datasource: Prometheus
+              k8s-dashboard:
+                gnetId: 15661
+                revision: 2
+                datasource:
+                  - name: DS__VICTORIAMETRICS-PROD-ALL
+                    value: prometheus
+              velero-backups:
+                gnetId: 23838
+                revision: 1
+                datasource:
+                  - name: DS_PROMETHEUS
+                    value: prometheus
+
+          envFromSecret: grafana-telegram
+          envFromSecrets:
+            - name: grafana-mullvad
+          env:
+            GF_SERVER_ROOT_URL: https://grafana.m8t.io
+            GF_PLUGINS_ENABLE_ALPHA: "false"
+            GF_LOG_LEVEL: warn
+          alerting:
+            contactpoints.yaml:
+              apiVersion: 1
+              contactPoints:
+                - orgId: 1
+                  name: Telegram
+                  receivers:
+                    - uid: telegram
+                      type: telegram
+                      settings:
+                        bottoken: $TELEGRAM_BOT_TOKEN
+                        chatid: "257158750"
+                        parse_mode: HTML
+                        message: '{{ `{{ template "telegram" . }}` }}'
+                # Dead-man's switch: always-firing heartbeat rule pings
+                # healthchecks.io; if pings stop, healthchecks alerts
+                # externally (cluster/Grafana death is otherwise invisible).
+                # HEARTBEAT_PING_URL comes from the grafana-telegram secret.
+                - orgId: 1
+                  name: Heartbeat
+                  receivers:
+                    - uid: heartbeat
+                      type: webhook
+                      settings:
+                        url: $HEARTBEAT_PING_URL
+                        httpMethod: POST
+            policies.yaml:
+              apiVersion: 1
+              policies:
+                - orgId: 1
+                  receiver: Telegram
+                  group_by: [alertname]
+                  group_wait: 30s
+                  group_interval: 5m
+                  routes:
+                    - receiver: Heartbeat
+                      object_matchers:
+                        - - severity
+                          - =
+                          - heartbeat
+                      group_wait: 10s
+                      group_interval: 1m
+                      repeat_interval: 4m
+
+          route:
+            main:
+              enabled: true
+              apiVersion: gateway.networking.k8s.io/v1
+              kind: HTTPRoute
+              parentRefs:
+                - name: eg
+                  namespace: envoy-gateway-system
+                  sectionName: https
+              hostnames:
+                - grafana.m8t.io
+    - repoURL: https://gitlab.com/dan361/homelab-ops.git
+      targetRevision: main
+      path: gitops/infra/monitoring/grafana-config
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: monitoring
+  syncPolicy:
+    retry:
+      limit: 10
+      backoff:
+        duration: 30s
+        factor: 2
+        maxDuration: 10m
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions: []
