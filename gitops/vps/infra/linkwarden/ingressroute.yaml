@@ -1,0 +1,16 @@
+---
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: linkwarden
+  namespace: linkwarden
+spec:
+  entryPoints:
+    - websecure
+  routes:
+    - match: Host(`linkwarden.m8t.io`)
+      kind: Rule
+      services:
+        - name: linkwarden
+          port: 3000
+  tls: {}

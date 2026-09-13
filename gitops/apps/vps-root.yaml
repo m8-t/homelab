@@ -1,0 +1,30 @@
+---
+# App-of-apps for the VPS cluster. Lives in the homelab argocd namespace,
+# discovered by the homelab root app, and in turn syncs gitops/vps/apps/
+# (Applications that target the VPS cluster under the `vps` project).
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: vps-root
+  namespace: argocd
+spec:
+  project: homelab
+  source:
+    repoURL: https://gitlab.com/dan361/homelab-ops.git
+    targetRevision: main
+    path: gitops/vps/apps
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: argocd
+  syncPolicy:
+    retry:
+      limit: 10
+      backoff:
+        duration: 30s
+        factor: 2
+        maxDuration: 10m
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - ApplyOutOfSyncOnly=true

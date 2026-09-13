@@ -1,0 +1,19 @@
+---
+- name: Deploy cluster addons (run once regardless of host count)
+  run_once: true
+  block:
+    - name: Wait for API server to be ready
+      kubernetes.core.k8s_info:
+        kind: Node
+      register: addons_nodes
+      until: addons_nodes.resources is defined and addons_nodes.resources | length > 0
+      retries: 30
+      delay: 10
+      delegate_to: localhost
+      become: false
+
+    - name: Import sealed-secrets tasks
+      ansible.builtin.import_tasks: sealed_secrets.yml
+
+    - name: Import argocd tasks
+      ansible.builtin.import_tasks: argocd.yml

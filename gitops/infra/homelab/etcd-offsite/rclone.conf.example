@@ -1,0 +1,34 @@
+# Template for the etcd-offsite-rclone secret.
+#
+# 1. Copy this file outside the repo (e.g. /tmp/rclone.conf) and fill it in.
+# 2. password/password2 must be `rclone obscure` output, NOT the plaintext:
+#        rclone obscure '<CRYPT_PASSWORD>'   -> password =
+#        rclone obscure '<CRYPT_SALT>'       -> password2 =
+#    Plaintext here fails at runtime with "base64 decode failed when
+#    revealing password - is it obscured?". The S3 keys in [hetzner] stay
+#    plain. Store the plaintext password + salt in Vaultwarden -- without
+#    them the uploaded snapshots are unrecoverable.
+# 3. Seal and delete the filled-in copy:
+#        k create secret generic etcd-offsite-rclone -n etcd-offsite \
+#          --from-file=rclone.conf=/tmp/rclone.conf --dry-run=client -o yaml | \
+#          kubeseal --cert ansible/sealed-secrets/tls.crt --format yaml \
+#          > gitops/infra/homelab/etcd-offsite/rclone.sealedsecret.yaml
+#        rm /tmp/rclone.conf
+#
+# Never commit a filled-in copy of this file.
+
+[hetzner]
+type = s3
+provider = Other
+endpoint = https://nbg1.your-objectstorage.com
+region = nbg1
+access_key_id = <ACCESS_KEY>
+secret_access_key = <SECRET_KEY>
+
+[crypt]
+type = crypt
+remote = hetzner:m8t-etcd/etcd-snapshots
+filename_encryption = off
+directory_name_encryption = false
+password = <OUTPUT_OF_rclone_obscure_CRYPT_PASSWORD>
+password2 = <OUTPUT_OF_rclone_obscure_CRYPT_SALT>

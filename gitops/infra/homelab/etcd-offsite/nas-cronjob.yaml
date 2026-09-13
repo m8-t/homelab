@@ -1,0 +1,57 @@
+---
+# Mirrors node3's local etcd snapshots to the NAS export (172.16.20.5:/k3s).
+# Replaces the systemd etcd-snapshot-nas-sync timer/service + NFS mount unit
+# previously provisioned by ansible/migrate-node3-etcd.yml -- same retention
+# behavior (rclone sync prunes the destination to match the source), no
+# rclone.conf needed since both ends are plain filesystem paths.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: etcd-snapshot-nas-sync
+  namespace: etcd-offsite
+spec:
+  schedule: "30 0 * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 1800
+      template:
+        spec:
+          nodeSelector:
+            kubernetes.io/hostname: node3
+          restartPolicy: Never
+          containers:
+            - name: rclone
+              image: rclone/rclone:latest
+              args:
+                - sync
+                - /snapshots
+                - /nas/etcd-snapshots
+                # abort instead of mirroring a mass deletion if the local
+                # snapshot dir is unexpectedly empty (e.g. fresh rebuild)
+                - --max-delete=3
+                - -v
+              volumeMounts:
+                - name: snapshots
+                  mountPath: /snapshots
+                  readOnly: true
+                - name: nas
+                  mountPath: /nas
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 64Mi
+                limits:
+                  memory: 256Mi
+          volumes:
+            - name: snapshots
+              hostPath:
+                path: /var/lib/rancher/k3s/server/db/snapshots
+                type: Directory
+            - name: nas
+              nfs:
+                server: 172.16.20.5
+                path: /k3s
