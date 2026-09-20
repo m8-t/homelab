@@ -1,0 +1,30 @@
+---
+# Homelab-side ESO objects that push the wildcard cert to the VPS: the VPS CA
+# ConfigMap, the SecretStore (VPS API over the tunnel), the sealed eso-writer
+# token, and the PushSecret itself. Wave 2 so the ESO CRDs (wave 1) exist first.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: vps-cert-push
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "2"
+spec:
+  project: homelab
+  source:
+    repoURL: https://gitlab.com/dan361/homelab-ops.git
+    targetRevision: main
+    path: gitops/infra/homelab/vps-cert-push
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: envoy-gateway-system
+  syncPolicy:
+    retry:
+      limit: 10
+      backoff:
+        duration: 30s
+        factor: 2
+        maxDuration: 10m
+    automated:
+      prune: true
+      selfHeal: true

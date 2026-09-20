@@ -1,0 +1,134 @@
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-alerts-cluster
+  namespace: monitoring
+  labels:
+    grafana_alert: "1"
+data:
+  cluster-alerts.yaml: |
+    apiVersion: 1
+    groups:
+      - orgId: 1
+        name: workload-alerts
+        folder: Alerts
+        interval: 1m
+        rules:
+          - uid: pod-crash-loop
+            title: Pod CrashLooping
+            noDataState: OK
+            condition: B
+            data:
+              - refId: A
+                relativeTimeRange:
+                  from: 3600
+                  to: 0
+                datasourceUid: prometheus
+                model:
+                  expr: 'increase(kube_pod_container_status_restarts_total[1h])'
+                  instant: true
+                  refId: A
+              - refId: B
+                datasourceUid: __expr__
+                model:
+                  type: threshold
+                  expression: A
+                  conditions:
+                    - evaluator:
+                        type: gt
+                        params: [3]
+                  refId: B
+            for: 5m
+            labels:
+              severity: warning
+            annotations:
+              summary: '{{ $labels.namespace }}/{{ $labels.pod }} restarted >3 times in 1h'
+
+          - uid: deployment-unavailable
+            title: Deployment Has Unavailable Replicas
+            condition: B
+            noDataState: OK
+            data:
+              - refId: A
+                relativeTimeRange:
+                  from: 300
+                  to: 0
+                datasourceUid: prometheus
+                model:
+                  expr: 'kube_deployment_status_replicas_unavailable'
+                  instant: true
+                  refId: A
+              - refId: B
+                datasourceUid: __expr__
+                model:
+                  type: threshold
+                  expression: A
+                  conditions:
+                    - evaluator:
+                        type: gt
+                        params: [0]
+                  refId: B
+            for: 10m
+            labels:
+              severity: warning
+            annotations:
+              summary: '{{ $labels.namespace }}/{{ $labels.deployment }} has unavailable replicas'
+
+          - uid: cert-expiry-soon
+            title: Certificate Expiring Soon
+            condition: B
+            data:
+              - refId: A
+                relativeTimeRange:
+                  from: 300
+                  to: 0
+                datasourceUid: prometheus
+                model:
+                  expr: '(certmanager_certificate_expiration_timestamp_seconds - time()) / 86400'
+                  instant: true
+                  refId: A
+              - refId: B
+                datasourceUid: __expr__
+                model:
+                  type: threshold
+                  expression: A
+                  conditions:
+                    - evaluator:
+                        type: lt
+                        params: [14]
+                  refId: B
+            for: 1h
+            labels:
+              severity: warning
+            annotations:
+              summary: 'Certificate {{ $labels.name }} in {{ $labels.namespace }} expires in <14 days'
+
+          - uid: velero-backup-failure
+            title: Velero Backup Failure
+            condition: B
+            data:
+              - refId: A
+                relativeTimeRange:
+                  from: 86400
+                  to: 0
+                datasourceUid: prometheus
+                model:
+                  expr: 'increase(velero_backup_failure_total[24h])'
+                  instant: true
+                  refId: A
+              - refId: B
+                datasourceUid: __expr__
+                model:
+                  type: threshold
+                  expression: A
+                  conditions:
+                    - evaluator:
+                        type: gt
+                        params: [0]
+                  refId: B
+            for: 5m
+            labels:
+              severity: critical
+            annotations:
+              summary: 'Velero backup failures detected in the last 24h'

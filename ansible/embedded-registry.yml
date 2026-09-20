@@ -1,0 +1,77 @@
+---
+# Enables the k3s embedded registry mirror (Spegel-based P2P image cache)
+# across all cluster nodes. Idempotent -- no restart when files are already
+# in desired state.
+#
+# - `embedded-registry: true` in config.yaml is a server-only flag; agents
+#   fatal with "flag provided but not defined" if it's present.
+# - registries.yaml wildcard mirror routes all upstream registries through
+#   the local embedded endpoint. Rendered on every mesh member.
+# - Restarts k3s / k3s-agent only when a config file actually changed.
+#
+# Requires TCP 5001 and 6443 reachable between participating nodes.
+# Docs: https://docs.k3s.io/installation/registry-mirror
+#
+# Usage: ansible-playbook ansible/embedded-registry.yml -K
+- name: Enable k3s embedded registry on cache-eligible nodes
+  hosts: image_cache_nodes
+  become: true
+  gather_facts: false
+  serial: 1
+  tasks:
+    - name: Ensure /etc/rancher/k3s exists
+      ansible.builtin.raw: mkdir -p /etc/rancher/k3s
+      changed_when: false
+
+    - name: Ensure /etc/rancher/k3s/registries.yaml has wildcard mirror
+      ansible.builtin.raw: |
+        desired=$(mktemp)
+        cat > "$desired" << 'EOF'
+        mirrors:
+          "*":
+        EOF
+        if cmp -s "$desired" /etc/rancher/k3s/registries.yaml 2>/dev/null; then
+          rm -f "$desired"
+          echo UNCHANGED
+        else
+          mv "$desired" /etc/rancher/k3s/registries.yaml
+          echo CHANGED
+        fi
+      register: registries_result
+      changed_when: registries_result.stdout | trim == 'CHANGED'
+
+    - name: "Ensure embedded-registry flag in config.yaml (servers only)"
+      when: inventory_hostname in groups['k3s_servers']
+      ansible.builtin.raw: |
+        cfg=/etc/rancher/k3s/config.yaml
+        touch "$cfg"
+        if grep -qx 'embedded-registry: true' "$cfg"; then
+          echo UNCHANGED
+        else
+          sed -i '/^embedded-registry:/d' "$cfg"
+          echo 'embedded-registry: true' >> "$cfg"
+          echo CHANGED
+        fi
+      register: config_result
+      changed_when: config_result.stdout | trim == 'CHANGED'
+
+    - name: Restart k3s server (on change)
+      when:
+        - inventory_hostname in groups['k3s_servers']
+        - registries_result is changed or config_result is changed
+      ansible.builtin.raw: systemctl restart k3s.service
+
+    - name: Restart k3s agent (on change)
+      when:
+        - inventory_hostname in groups['k3s_agents']
+        - registries_result is changed
+      ansible.builtin.raw: systemctl restart k3s-agent.service
+
+    - name: Wait for node Ready (on change)
+      when: registries_result is changed or config_result is changed
+      ansible.builtin.raw: >
+        until /usr/local/bin/k3s kubectl get node {{ inventory_hostname }}
+        -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}'
+        2>/dev/null | grep -qx True; do sleep 5; done
+      changed_when: false
+      delegate_to: "{{ groups['k3s_servers'] | first }}"

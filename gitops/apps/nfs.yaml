@@ -1,0 +1,44 @@
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: nfs
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+spec:
+  project: homelab
+  source:
+    repoURL: https://kubernetes-sigs.github.io/nfs-subdir-external-provisioner
+    chart: nfs-subdir-external-provisioner
+    targetRevision: 4.0.18
+    helm:
+      values: |
+        nfs:
+          server: 172.16.20.5
+          path: /k3s
+        storageClass:
+          name: nfs
+          defaultClass: true
+          reclaimPolicy: Retain
+        resources:
+          requests:
+            cpu: 20m
+            memory: 32Mi
+          limits:
+            memory: 64Mi
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: nfs-provisioner
+  syncPolicy:
+    retry:
+      limit: 10
+      backoff:
+        duration: 30s
+        factor: 2
+        maxDuration: 10m
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true

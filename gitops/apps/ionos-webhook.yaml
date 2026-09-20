@@ -1,0 +1,38 @@
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: ionos-webhook
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "2"
+spec:
+  project: homelab
+  sources:
+    - repoURL: https://fabmade.github.io/cert-manager-webhook-ionos
+      chart: cert-manager-webhook-ionos
+      targetRevision: 1.3.1
+      helm:
+        valuesObject:
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              memory: 64Mi
+    - repoURL: https://gitlab.com/dan361/homelab-ops.git
+      targetRevision: main
+      path: gitops/infra/homelab/ionos-webhook
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: cert-manager
+  syncPolicy:
+    retry:
+      limit: 10
+      backoff:
+        duration: 30s
+        factor: 2
+        maxDuration: 10m
+    automated:
+      prune: true
+      selfHeal: true
