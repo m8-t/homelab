@@ -1,0 +1,19 @@
+---
+apiVersion: metallb.io/v1beta1
+kind: IPAddressPool
+metadata:
+  name: ingress-pool
+  namespace: metallb-system
+spec:
+  addresses:
+    - 172.16.20.110-172.16.20.120
+---
+apiVersion: metallb.io/v1beta1
+kind: IPAddressPool
+metadata:
+  name: adguard-pool
+  namespace: metallb-system
+spec:
+  addresses:
+    - 172.16.20.70/32
+  autoAssign: false

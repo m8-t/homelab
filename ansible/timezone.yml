@@ -1,0 +1,9 @@
+---
+- name: Set timezone on all nodes
+  hosts: all
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Set timezone to Europe/Berlin
+      ansible.builtin.raw: timedatectl set-timezone Europe/Berlin
+      changed_when: true

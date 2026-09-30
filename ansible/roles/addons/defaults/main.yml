@@ -1,0 +1,6 @@
+---
+addons_argocd_chart_version: "9.4.17"
+addons_sealed_secrets_chart_version: "2.18.4"
+# Private key lives outside the repo tree; only the public cert stays in git.
+addons_sealed_secrets_key_path: "{{ lookup('env', 'HOME') }}/sealed-secrets/tls.key"
+addons_sealed_secrets_cert_path: "{{ playbook_dir }}/sealed-secrets/tls.crt"

@@ -1,0 +1,218 @@
+---
+# Mullvad WireGuard + tinyproxy forward proxy on node2.
+#
+# Setup:
+#   1. Fill in ansible/group_vars/vpn_proxy/main.yml with Mullvad config values
+#   2. Create vault file with the private key:
+#      cd ansible && ansible-vault create group_vars/vpn_proxy/vault.yml
+#      Contents:  mullvad_private_key: "<your-key>"
+#   3. Run:  ansible-playbook ansible/vpn-proxy.yml -K
+#
+# First run installs packages via transactional-update and reboots.
+# Second run (after reboot) deploys configs and starts services.
+#
+# All node2 traffic (including DNS) routes through Mullvad when the tunnel
+# is up. LAN access is preserved via ip rule so SSH and proxy connections
+# from 172.16.20.0/24 still work.
+#
+# Browser setup: FoxyProxy -> add proxy 172.16.20.81:8888 (HTTP),
+# then create rules for domains that should use the tunnel.
+- name: Configure Mullvad WireGuard + tinyproxy on node2
+  hosts: vpn_proxy
+  become: true
+  gather_facts: false
+  vars:
+    required_packages:
+      - wireguard-tools
+      - tinyproxy
+      - iptables
+  tasks:
+    - name: Check if required packages are installed
+      ansible.builtin.raw: rpm -q {{ required_packages | join(' ') }} >/dev/null 2>&1 && echo OK || echo MISSING
+      register: pkg_check
+      changed_when: false
+
+    - name: Install packages via transactional-update (needs reboot)
+      when: pkg_check.stdout | trim == 'MISSING'
+      ansible.builtin.raw: >-
+        transactional-update --non-interactive pkg install {{ required_packages | join(' ') }}
+      register: pkg_install
+
+    - name: Reboot to activate new snapshot
+      when: pkg_install is not skipped and pkg_install is changed
+      ansible.builtin.raw: systemctl reboot
+      ignore_errors: true
+
+    - name: Wait for node to come back after reboot
+      when: pkg_install is not skipped and pkg_install is changed
+      ansible.builtin.wait_for_connection:
+        delay: 10
+        timeout: 180
+
+    - name: Verify packages are available after reboot
+      when: pkg_install is not skipped and pkg_install is changed
+      ansible.builtin.raw: rpm -q {{ required_packages | join(' ') }}
+      changed_when: false
+
+    - name: Ensure /etc/wireguard exists
+      ansible.builtin.raw: mkdir -p /etc/wireguard
+      changed_when: false
+
+    - name: Deploy WireGuard config
+      ansible.builtin.raw: |
+        desired=$(mktemp)
+        cat > "$desired" << 'WGEOF'
+        [Interface]
+        PrivateKey = {{ mullvad_private_key }}
+        Address = {{ mullvad_address }},{{ mullvad_address_v6 }}
+        PostUp = ip rule del to {{ lan_subnet }} lookup main priority 50 2>/dev/null || true; ip rule add to {{ lan_subnet }} lookup main priority 50
+        PreDown = ip rule del to {{ lan_subnet }} lookup main priority 50 2>/dev/null || true
+
+        [Peer]
+        PublicKey = {{ mullvad_peer_public_key }}
+        AllowedIPs = 0.0.0.0/0, ::/0
+        Endpoint = {{ mullvad_endpoint }}
+        WGEOF
+        if cmp -s "$desired" /etc/wireguard/mullvad.conf 2>/dev/null; then
+          rm -f "$desired"
+          echo UNCHANGED
+        else
+          mv "$desired" /etc/wireguard/mullvad.conf
+          chmod 600 /etc/wireguard/mullvad.conf
+          restorecon /etc/wireguard/mullvad.conf 2>/dev/null || true
+          echo CHANGED
+        fi
+      register: wg_config
+      changed_when: wg_config.stdout | trim == 'CHANGED'
+
+    - name: Deploy tinyproxy config
+      ansible.builtin.raw: |
+        desired=$(mktemp)
+        cat > "$desired" << 'TPEOF'
+        User tinyproxy
+        Group tinyproxy
+        Port {{ tinyproxy_port }}
+        Listen {{ node2_ip }}
+        Allow {{ tinyproxy_allow }}
+        Timeout 600
+        Syslog On
+        LogLevel Info
+        TPEOF
+        if cmp -s "$desired" /etc/tinyproxy/tinyproxy.conf 2>/dev/null; then
+          rm -f "$desired"
+          echo UNCHANGED
+        else
+          mkdir -p /etc/tinyproxy
+          mv "$desired" /etc/tinyproxy/tinyproxy.conf
+          chmod 644 /etc/tinyproxy/tinyproxy.conf
+          restorecon /etc/tinyproxy/tinyproxy.conf 2>/dev/null || true
+          echo CHANGED
+        fi
+      register: tp_config
+      changed_when: tp_config.stdout | trim == 'CHANGED'
+
+    - name: Open tinyproxy port in firewall
+      ansible.builtin.raw: |
+        if ! firewall-cmd --query-port={{ tinyproxy_port }}/tcp 2>/dev/null; then
+          firewall-cmd --permanent --add-port={{ tinyproxy_port }}/tcp
+          firewall-cmd --reload
+          echo CHANGED
+        else
+          echo UNCHANGED
+        fi
+      register: fw_result
+      changed_when: fw_result.stdout | trim == 'CHANGED'
+
+    - name: Set DNS to Mullvad resolver
+      ansible.builtin.raw: |
+        target="nameserver {{ mullvad_dns }}"
+        current=$(cat /etc/resolv.conf 2>/dev/null)
+        if [ "$current" = "$target" ]; then
+          echo UNCHANGED
+        else
+          echo "$target" > /etc/resolv.conf
+          echo CHANGED
+        fi
+      register: dns_config
+      changed_when: dns_config.stdout | trim == 'CHANGED'
+
+    - name: Enable and start WireGuard tunnel
+      ansible.builtin.raw: |
+        systemctl enable wg-quick@mullvad
+        if ! systemctl is-active --quiet wg-quick@mullvad; then
+          systemctl start wg-quick@mullvad
+          echo CHANGED
+        else
+          echo UNCHANGED
+        fi
+      register: wg_svc
+      changed_when: wg_svc.stdout | trim == 'CHANGED'
+
+    - name: Restart WireGuard tunnel (on config change)
+      when: wg_config is changed
+      ansible.builtin.raw: systemctl restart wg-quick@mullvad
+
+    - name: Restart timesyncd after tunnel comes up
+      ansible.builtin.raw: |
+        mkdir -p /etc/systemd/system/wg-quick@mullvad.service.d
+        desired=$(mktemp)
+        cat > "$desired" << 'EOF'
+        [Service]
+        ExecStartPost=systemctl try-restart systemd-timesyncd
+        EOF
+        if cmp -s "$desired" /etc/systemd/system/wg-quick@mullvad.service.d/timesyncd.conf 2>/dev/null; then
+          rm -f "$desired"
+          echo UNCHANGED
+        else
+          mv "$desired" /etc/systemd/system/wg-quick@mullvad.service.d/timesyncd.conf
+          systemctl daemon-reload
+          echo CHANGED
+        fi
+      register: timesyncd_dropin
+      changed_when: timesyncd_dropin.stdout | trim == 'CHANGED'
+
+    - name: Ensure tinyproxy starts after network is online
+      ansible.builtin.raw: |
+        mkdir -p /etc/systemd/system/tinyproxy.service.d
+        desired=$(mktemp)
+        cat > "$desired" << 'EOF'
+        [Unit]
+        After=network-online.target
+        Wants=network-online.target
+        EOF
+        if cmp -s "$desired" /etc/systemd/system/tinyproxy.service.d/network.conf 2>/dev/null; then
+          rm -f "$desired"
+          echo UNCHANGED
+        else
+          mv "$desired" /etc/systemd/system/tinyproxy.service.d/network.conf
+          systemctl daemon-reload
+          echo CHANGED
+        fi
+      register: tp_dropin
+      changed_when: tp_dropin.stdout | trim == 'CHANGED'
+
+    - name: Enable and start tinyproxy
+      ansible.builtin.raw: |
+        systemctl enable tinyproxy
+        if ! systemctl is-active --quiet tinyproxy; then
+          systemctl start tinyproxy
+          echo CHANGED
+        else
+          echo UNCHANGED
+        fi
+      register: tp_svc
+      changed_when: tp_svc.stdout | trim == 'CHANGED'
+
+    - name: Restart tinyproxy (on config change)
+      when: tp_config is changed
+      ansible.builtin.raw: systemctl restart tinyproxy
+
+    - name: Verify tunnel is up
+      ansible.builtin.raw: |
+        wg show mullvad 2>&1 | head -5
+      changed_when: false
+
+    - name: Verify proxy is listening
+      ansible.builtin.raw: |
+        ss -tlnp | grep ':{{ tinyproxy_port }}'
+      changed_when: false

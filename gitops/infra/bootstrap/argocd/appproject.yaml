@@ -1,0 +1,32 @@
+---
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: homelab
+  namespace: argocd
+spec:
+  description: Homelab cluster
+  sourceRepos:
+    - https://gitlab.com/dan361/homelab-ops.git
+    - git@gitlab.com:dan361/homelab-ops.git
+    - https://metallb.github.io/metallb
+    - docker.io/envoyproxy
+    - https://charts.jetstack.io
+    - https://fabmade.github.io/cert-manager-webhook-ionos
+    - https://kubernetes-sigs.github.io/nfs-subdir-external-provisioner
+    - https://charts.gabe565.com
+    - https://kubernetes-sigs.github.io/headlamp
+    - https://github.com/rustfs/rustfs
+    - https://vmware-tanzu.github.io/helm-charts
+    - https://stakater.github.io/stakater-charts
+    - https://aquasecurity.github.io/helm-charts
+    - https://charts.external-secrets.io
+  destinations:
+    - server: https://kubernetes.default.svc
+      namespace: "*"
+  clusterResourceWhitelist:
+    - group: "*"
+      kind: "*"
+  namespaceResourceWhitelist:
+    - group: "*"
+      kind: "*"
