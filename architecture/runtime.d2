@@ -1,0 +1,129 @@
+vars: {
+  d2-config: {
+    layout-engine: dagre
+    theme-id: 4
+    dark-theme-id: 200
+    pad: 40
+    center: true
+    sketch: true
+  }
+}
+
+direction: down
+
+lan-users: "LAN and remote-access\nVPN clients" {
+  shape: person
+}
+internet-users: "Internet clients" {
+  shape: person
+}
+gitlab: "GitLab\nhomelab-ops and docs" {
+  shape: cloud
+}
+
+home: {
+  label: "Home site · 172.16.20.0/24"
+  direction: down
+
+  router: "FritzBox\nLAN gateway\nWireGuard · 10.99.0.2" {
+    shape: hexagon
+  }
+  nas: "NAS · 172.16.20.5\nNFS /k3s" {
+    shape: cylinder
+  }
+
+  cluster: {
+    label: "Turing Pi 2 · k3s · openSUSE MicroOS"
+    direction: down
+
+    compute: {
+      label: "Compute and local storage"
+      direction: right
+
+      node1: "node1 · 172.16.20.82\nagent · 8 GB\n512 GB microSD"
+      node3: "node3 · 172.16.20.80\nserver · 8 GB\nembedded etcd"
+      node4: "node4 · 172.16.20.83\nagent · 8 GB\n128 GB microSD"
+      sata: "node3 SATA · 465 GB\nRustFS · Prometheus · Loki" {
+        shape: cylinder
+      }
+    }
+
+    mesh: "Flannel CNI\nSpegel P2P image cache" {
+      shape: hexagon
+    }
+
+    platform: {
+      label: "Cluster platform"
+      direction: right
+
+      gateway: "MetalLB · 172.16.20.110\nEnvoy Gateway · HTTPS\nwildcard *.m8t.io TLS"
+      adguard: "AdGuard Home\nMetalLB · 172.16.20.70\nindependent DNS VIP"
+      argocd: "Argo CD hub\napp-of-apps · sync waves\nprune and self-heal"
+      security: "cert-manager · IONOS DNS01\nSealed Secrets · External Secrets\nTrivy · Reloader"
+    }
+
+    apps: "Workloads\nVaultwarden + PostgreSQL · Music Assistant\nHeadlamp · Homelab Docs"
+    observability: "Observability\nPrometheus Operator · Grafana\nLoki · Alloy"
+    velero: "Velero + node-agent\ndaily kopia PVC backups"
+    rustfs: "RustFS\nprimary S3 backup target" {
+      shape: cylinder
+    }
+  }
+}
+
+vps: {
+  label: "Hetzner VPS · public 91.98.200.253"
+  direction: down
+
+  wireguard: "WireGuard peer\n10.99.0.1" {
+    shape: hexagon
+  }
+  traefik: "Traefik + klipper-lb\npublic 80/443\nwildcard *.m8t.io TLS"
+
+  cluster: {
+    label: "Single-node k3s · AlmaLinux"
+    direction: down
+
+    api: "k3s API · 6443"
+    apps: "Public workloads\nForgejo + Actions runner\nLinkwarden + PostgreSQL + Meilisearch"
+    platform: "Spoke services\nindependent Sealed Secrets\nnode-exporter · kube-state-metrics"
+    velero: "Independent Velero\nlocal-path PVC backups"
+  }
+}
+
+hetzner-s3: "Hetzner Object Storage\nseparate homelab, etcd, and VPS buckets\nSSE-C / rclone crypt" {
+  shape: cloud
+}
+
+lan-users -> home.cluster.platform.adguard: "DNS · 172.16.20.70"
+lan-users -> home.cluster.platform.gateway: "HTTPS · 172.16.20.110"
+internet-users -> vps.traefik: HTTPS
+
+gitlab -> home.cluster.platform.argocd: "desired state"
+home.cluster.platform.argocd -> home.cluster.platform.gateway
+home.cluster.platform.argocd -> home.cluster.platform.security
+home.cluster.platform.argocd -> home.cluster.apps
+home.cluster.platform.argocd -> home.cluster.observability
+home.cluster.platform.argocd -> home.cluster.velero
+home.cluster.platform.gateway -> home.cluster.apps
+home.cluster.platform.security -> home.cluster.platform.gateway: TLS
+
+home.cluster.compute.node1 -- home.cluster.mesh
+home.cluster.compute.node3 -- home.cluster.mesh
+home.cluster.compute.node4 -- home.cluster.mesh
+home.cluster.compute.node3 -- home.cluster.compute.sata
+home.cluster.compute.sata -- home.cluster.rustfs
+home.cluster.compute.sata -- home.cluster.observability
+home.nas -> home.cluster.apps: "dynamic and static NFS PVs"
+home.cluster.apps -> home.cluster.velero: "PVC data"
+home.cluster.velero -> home.cluster.rustfs: primary
+home.cluster.velero -> hetzner-s3: off-site
+
+home.router -- vps.wireguard: "site-to-site tunnel" {
+  style.stroke-dash: 6
+}
+home.cluster.platform.argocd -> vps.wireguard: "manages spoke\nhome initiates"
+vps.wireguard -> vps.cluster.api
+vps.traefik -> vps.cluster.apps
+vps.cluster.apps -> vps.cluster.velero: "PVC data"
+vps.cluster.velero -> hetzner-s3: off-site

@@ -1,0 +1,49 @@
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-alerts-storage-logs
+  namespace: monitoring
+  labels:
+    grafana_alert: "1"
+data:
+  storage-log-alerts.yaml: |
+    apiVersion: 1
+    groups:
+      - orgId: 1
+        name: storage-log-alerts
+        folder: Alerts
+        interval: 1m
+        rules:
+          - uid: kernel-storage-errors
+            title: Kernel Storage Errors
+            condition: B
+            noDataState: OK
+            execErrState: KeepLast
+            data:
+              - refId: A
+                relativeTimeRange:
+                  from: 600
+                  to: 0
+                datasourceUid: loki
+                model:
+                  expr: >-
+                    sum by (hostname) (count_over_time({job="journal", transport="kernel"}
+                    |~ "(?i)btrfs.*(errno=-5|corrupt)|remounting.*read-only|i/o error" [10m]))
+                  queryType: instant
+                  refId: A
+              - refId: B
+                datasourceUid: __expr__
+                model:
+                  type: threshold
+                  expression: A
+                  conditions:
+                    - evaluator:
+                        type: gt
+                        params: [0]
+                  refId: B
+            for: 0s
+            labels:
+              severity: critical
+            annotations:
+              summary: 'Kernel storage errors on {{ $labels.hostname }} -- check journal, medium may be failing'
