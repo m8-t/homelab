@@ -1,0 +1,25 @@
+---
+- name: Deploy cluster addons
+  hosts: k3s_init_server
+  become: false
+  gather_facts: false
+  module_defaults:
+    kubernetes.core.k8s:
+      kubeconfig: "{{ local_kubeconfig_path }}"
+    kubernetes.core.k8s_info:
+      kubeconfig: "{{ local_kubeconfig_path }}"
+  pre_tasks:
+    - name: Verify kubeconfig exists
+      ansible.builtin.stat:
+        path: "{{ local_kubeconfig_path }}"
+      register: kubeconfig_stat
+      delegate_to: localhost
+
+    - name: Fail if kubeconfig missing
+      ansible.builtin.fail:
+        msg: "kubeconfig not found at {{ local_kubeconfig_path }} -- run make bootstrap-server first"
+      when: not kubeconfig_stat.stat.exists
+      delegate_to: localhost
+
+  roles:
+    - addons

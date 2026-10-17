@@ -1,0 +1,76 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: wiim-bridge
+  namespace: navidrome
+  labels:
+    app: wiim-bridge
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: wiim-bridge
+  template:
+    metadata:
+      labels:
+        app: wiim-bridge
+      annotations:
+        reloader.stakater.com/auto: "true"
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsUser: 65532
+        runAsGroup: 65532
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: wiim-bridge
+          image: ghcr.io/m8-t/navidrome-wiim-bridge:0.9.0@sha256:b58558b7af54258d96c6ab7d76c013e6c53b95d809141f061ce72d4e80592044
+          envFrom:
+            - configMapRef:
+                name: wiim-bridge
+            - secretRef:
+                name: wiim-bridge
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          resources:
+            requests:
+              cpu: 10m
+              memory: 64Mi
+            limits:
+              memory: 256Mi
+          ports:
+            - name: http
+              containerPort: 8098
+            - name: device
+              containerPort: 8099
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 3
+            failureThreshold: 20
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 30
+            failureThreshold: 3
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}

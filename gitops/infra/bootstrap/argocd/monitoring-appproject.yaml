@@ -1,0 +1,26 @@
+---
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: monitoring
+  namespace: argocd
+spec:
+  description: Observability stack (Prometheus, Loki, Grafana, Alloy)
+  sourceRepos:
+    - https://prometheus-community.github.io/helm-charts
+    - https://grafana.github.io/helm-charts
+    - https://grafana-community.github.io/helm-charts
+    - https://gitlab.com/dan361/homelab-ops.git
+  destinations:
+    - server: https://kubernetes.default.svc
+      namespace: monitoring
+    # kube-prometheus-stack creates a Service/kube-prometheus-stack-coredns
+    # in kube-system so its ServiceMonitor can scrape CoreDNS metrics.
+    - server: https://kubernetes.default.svc
+      namespace: kube-system
+  clusterResourceWhitelist:
+    - group: "*"
+      kind: "*"
+  namespaceResourceWhitelist:
+    - group: "*"
+      kind: "*"

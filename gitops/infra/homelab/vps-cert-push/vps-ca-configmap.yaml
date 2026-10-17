@@ -1,0 +1,21 @@
+---
+# VPS k3s API server CA, so the homelab ESO SecretStore can verify
+# https://10.99.0.1:6443 over the tunnel. Public cert, not a secret -- kept as
+# a ConfigMap so the base64 CA never lands as an over-long inline caBundle line.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: vps-ca
+  namespace: envoy-gateway-system
+data:
+  ca.crt: |
+    -----BEGIN CERTIFICATE-----
+    MIIBdjCCAR2gAwIBAgIBADAKBggqhkjOPQQDAjAjMSEwHwYDVQQDDBhrM3Mtc2Vy
+    dmVyLWNhQDE3ODQ2NDI3MzAwHhcNMjYwNzIxMTMwNTMwWhcNMzYwNzE4MTMwNTMw
+    WjAjMSEwHwYDVQQDDBhrM3Mtc2VydmVyLWNhQDE3ODQ2NDI3MzAwWTATBgcqhkjO
+    PQIBBggqhkjOPQMBBwNCAAQmvxsUXZPyIAA/waP7VCbfv1Bl4/OsV1Og4vejbXt/
+    9wTH2MkB/tAfBF55Ql3otu6P0rOy6Sviv0nM398X7jI3o0IwQDAOBgNVHQ8BAf8E
+    BAMCAqQwDwYDVR0TAQH/BAUwAwEB/zAdBgNVHQ4EFgQUqLTH6Fa3CsMSB8pJYzRM
+    Rn3hhQIwCgYIKoZIzj0EAwIDRwAwRAIgWSeBDUbnSPZck8Y8P13kLA48GP6Ex/HK
+    AP5UkXGI3poCIDqK6Km8GU7ZdeSdsQHcW6bVVw8X+4W8V/U2A4uOWebG
+    -----END CERTIFICATE-----
