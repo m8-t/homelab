@@ -1,0 +1,80 @@
+---
+- name: Deploy ArgoCD HelmChart
+  kubernetes.core.k8s:
+    state: present
+    definition: "{{ lookup('template', 'argocd-helmchart.yaml.j2') | from_yaml }}"
+  delegate_to: localhost
+  become: false
+
+- name: Wait for ArgoCD server
+  kubernetes.core.k8s_info:
+    kind: Deployment
+    name: argocd-server
+    namespace: argocd
+  register: addons_argocd_deploy
+  until: >
+    addons_argocd_deploy.resources is defined and
+    addons_argocd_deploy.resources | length > 0 and
+    (addons_argocd_deploy.resources[0].status.availableReplicas | default(0)) ==
+    addons_argocd_deploy.resources[0].spec.replicas
+  retries: 30
+  delay: 10
+  delegate_to: localhost
+  become: false
+
+- name: Check for wildcard TLS secret file
+  ansible.builtin.stat:
+    path: "{{ playbook_dir }}/../tls.yaml"
+  register: addons_wildcard_tls_file
+  delegate_to: localhost
+  become: false
+
+- name: Ensure envoy-gateway-system namespace exists
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Namespace
+      metadata:
+        name: envoy-gateway-system
+  delegate_to: localhost
+  become: false
+  when: addons_wildcard_tls_file.stat.exists
+
+- name: Apply wildcard TLS secret
+  kubernetes.core.k8s:
+    state: present
+    definition: "{{ lookup('file', playbook_dir + '/../tls.yaml') | from_yaml }}"
+  delegate_to: localhost
+  become: false
+  when: addons_wildcard_tls_file.stat.exists
+
+- name: Warn if wildcard TLS secret file missing
+  ansible.builtin.debug:
+    msg: "WARNING: tls.yaml not found -- wildcard-tls secret not pre-applied. HTTPS listener will fail until cert-manager issues a new cert."
+  when: not addons_wildcard_tls_file.stat.exists
+
+# All AppProjects must exist before the root Application syncs -- apps
+# referencing a missing project fail their first sync (chicken-and-egg found
+# during the 2026-07-03 rebuild). ArgoCD adopts these later via the argocd app.
+- name: Apply ArgoCD AppProjects
+  kubernetes.core.k8s:
+    state: present
+    definition: "{{ lookup('file', item) | from_yaml }}"
+  loop: "{{ lookup('fileglob', playbook_dir + '/../gitops/infra/bootstrap/argocd/*appproject*.yaml', wantlist=True) }}"
+  delegate_to: localhost
+  become: false
+
+- name: Apply GitLab repo SealedSecret
+  kubernetes.core.k8s:
+    state: present
+    definition: "{{ lookup('file', playbook_dir + '/../gitops/infra/bootstrap/argocd/repo-secret.yaml') | from_yaml }}"
+  delegate_to: localhost
+  become: false
+
+- name: Apply root ArgoCD Application
+  kubernetes.core.k8s:
+    state: present
+    definition: "{{ lookup('template', 'argocd-root-app.yaml.j2') | from_yaml }}"
+  delegate_to: localhost
+  become: false

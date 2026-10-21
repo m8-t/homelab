@@ -1,0 +1,201 @@
+variant: fcos
+version: 1.5.0
+
+passwd:
+  users:
+    - name: root
+      ssh_authorized_keys:
+        - @@SSH_PUBKEY@@
+    - name: dan
+      no_create_home: true
+      password_hash: "@@PASSWORD_HASH@@"
+
+# WARNING: reflashing node3 wipes the SATA SSD (wipe_table/wipe_filesystem)
+# including the RustFS local Velero backups on the DATA partition. Verify the
+# Hetzner off-site backup is current before any reflash.
+storage:
+  disks:
+    - device: /dev/sda
+      wipe_table: true
+      partitions:
+        - label: RANCHER
+          size_mib: 102400
+        - label: DATA
+          size_mib: 0
+  filesystems:
+    - path: /var/lib/rancher
+      device: /dev/disk/by-partlabel/RANCHER
+      format: ext4
+      wipe_filesystem: true
+      with_mount_unit: true
+    - path: /var/lib/rustfs
+      device: /dev/disk/by-partlabel/DATA
+      format: ext4
+      wipe_filesystem: true
+      with_mount_unit: true
+  directories:
+    - path: /var/lib/rancher
+      mode: 0755
+    - path: /var/lib/rustfs
+      mode: 0755
+  files:
+    - path: /etc/hostname
+      mode: 0644
+      overwrite: true
+      contents:
+        inline: node3
+
+    - path: /etc/NetworkManager/system-connections/eth0.nmconnection
+      mode: 0600
+      contents:
+        inline: |
+          [connection]
+          id=eth0
+          type=ethernet
+
+          [ethernet]
+
+          [ipv4]
+          method=manual
+          addresses=172.16.20.80/24
+          gateway=172.16.20.10
+          dns=172.16.20.10
+
+          [ipv6]
+          method=disabled
+
+    - path: /etc/sudoers.d/dan
+      mode: 0440
+      contents:
+        inline: |
+          Defaults:dan !targetpw
+          dan ALL=(ALL) ALL
+
+    - path: /etc/profile.d/aliases.sh
+      mode: 0644
+      contents:
+        inline: |
+          alias k='kubectl'
+          alias journalctl='journalctl --no-pager'
+
+    - path: /etc/sysctl.d/99-k3s.conf
+      mode: 0644
+      contents:
+        inline: |
+          net.ipv4.ip_forward=1
+
+    # Cap journal size to 200M on constrained 7.26 GiB eMMC
+    - path: /etc/systemd/journald.conf.d/size.conf
+      mode: 0644
+      contents:
+        inline: |
+          [Journal]
+          SystemMaxUse=200M
+
+    - path: /etc/snapper/configs/root
+      mode: 0644
+      contents:
+        inline: |
+          SUBVOLUME="/"
+          FSTYPE="btrfs"
+          # Transactional-update already snapshots around package changes, and /etc overlay is in /var not captured by root snapshots; timeline snapshots add little value on a constrained 7 GiB eMMC
+          TIMELINE_CREATE="no"
+          TIMELINE_CLEANUP="yes"
+          TIMELINE_LIMIT_HOURLY=3
+          TIMELINE_LIMIT_DAILY=3
+          TIMELINE_LIMIT_WEEKLY=1
+          TIMELINE_LIMIT_MONTHLY=0
+          TIMELINE_LIMIT_YEARLY=0
+          NUMBER_CLEANUP="yes"
+          NUMBER_MIN_AGE=1800
+          NUMBER_LIMIT=5
+          NUMBER_LIMIT_IMPORTANT=10
+
+    # etcd S3 credentials + NAS snapshot replica units are NOT baked in --
+    # run ansible/migrate-node3-etcd.yml after a reflash to restore them.
+    - path: /etc/rancher/k3s/config.yaml
+      mode: 0644
+      contents:
+        inline: |
+          kubelet-arg:
+            - "image-gc-high-threshold=70"
+            - "image-gc-low-threshold=50"
+          cluster-init: true
+          etcd-snapshot-schedule-cron: "0 */6 * * *"
+          etcd-snapshot-retention: 12
+
+systemd:
+  units:
+    - name: transactional-update.timer
+      mask: true
+    - name: firewalld.service
+      enabled: false
+      mask: true
+    - name: jeos-firstboot.service
+      enabled: false
+      mask: true
+    - name: iscsid.service
+      enabled: true
+    - name: growdisk.service
+      enabled: true
+      contents: |
+        [Unit]
+        Description=Expand root partition to fill disk (runs once on first boot)
+        After=local-fs.target
+        ConditionPathExists=!/var/lib/growdisk-done
+
+        [Service]
+        Type=oneshot
+        ExecStart=/bin/bash -c 'sfdisk --delete /dev/mmcblk0 3 && \
+          echo ", +" | sfdisk --force --no-reread -N 2 /dev/mmcblk0 && \
+          touch /var/lib/growdisk-done && \
+          reboot'
+
+        [Install]
+        WantedBy=multi-user.target
+    - name: firstboot-packages.service
+      enabled: true
+      contents: |
+        [Unit]
+        Description=Install k3s dependencies on first boot
+        ConditionPathExists=!/var/lib/firstboot-packages-done
+        ConditionPathExists=/var/lib/growdisk-done
+        After=network-online.target
+        Wants=network-online.target
+
+        [Service]
+        Type=oneshot
+        ExecStart=/bin/bash -c 'btrfs filesystem resize max /var && \
+          mkdir -p /home/dan/.ssh && \
+          echo "@@SSH_PUBKEY@@" > /home/dan/.ssh/authorized_keys && \
+          chmod 700 /home/dan/.ssh && chmod 600 /home/dan/.ssh/authorized_keys && \
+          chown -R dan: /home/dan && \
+          transactional-update pkg install -y \
+          open-iscsi nfs-client bash-completion curl && \
+          touch /var/lib/firstboot-packages-done && \
+          reboot'
+
+        [Install]
+        WantedBy=multi-user.target
+    - name: install-k3s-server.service
+      enabled: true
+      contents: |
+        [Unit]
+        Description=Install k3s server (runs once on second boot after firstboot-packages)
+        After=network-online.target
+        Wants=network-online.target
+        ConditionPathExists=/var/lib/firstboot-packages-done
+        ConditionPathExists=!/usr/local/bin/k3s
+
+        [Service]
+        Type=oneshot
+        RemainAfterExit=yes
+        TimeoutStartSec=600
+        Environment="INSTALL_K3S_VERSION=@@K3S_VERSION@@"
+        Environment="INSTALL_K3S_EXEC=server --disable=traefik --disable=servicelb --write-kubeconfig-mode=644 --tls-san=172.16.20.80 --node-ip=172.16.20.80 --cluster-cidr=10.42.0.0/16 --service-cidr=10.43.0.0/16"
+        ExecStartPre=/bin/bash -c 'until timedatectl show --property=NTPSynchronized --value 2>/dev/null | grep -q yes; do sleep 5; done'
+        ExecStart=/bin/bash -c 'curl -sfL https://get.k3s.io -o /tmp/k3s-install.sh && sh /tmp/k3s-install.sh'
+        ExecStartPost=systemctl reboot
+
+        [Install]
+        WantedBy=multi-user.target
