@@ -1,0 +1,62 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: feishin
+  namespace: navidrome
+  labels:
+    app: feishin
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: feishin
+  template:
+    metadata:
+      labels:
+        app: feishin
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsUser: 101
+        runAsGroup: 101
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: feishin
+          image: ghcr.io/m8-t/feishin-jukebox:1.17.0-jukebox@sha256:260111b57d951aa95c7cdc2121a7fc277da9acf518d9a5ced0845ee608b3d565
+          env:
+            - name: SERVER_URL
+              value: "https://bridge.m8t.io"
+            - name: SERVER_TYPE
+              value: "navidrome"
+            - name: SERVER_NAME
+              value: "WiiM"
+            - name: SERVER_LOCK
+              value: "true"
+            - name: ANALYTICS_DISABLED
+              value: "true"
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+          resources:
+            requests:
+              cpu: 5m
+              memory: 32Mi
+            limits:
+              memory: 128Mi
+          ports:
+            - name: http
+              containerPort: 9180
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 30

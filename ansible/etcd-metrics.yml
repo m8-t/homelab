@@ -1,0 +1,47 @@
+---
+# Exposes the embedded etcd server metrics on node3 (plain http, port 2381 on
+# the node IP) so Prometheus can scrape etcd_disk_* / etcd_mvcc_* via the
+# kubeEtcd ServiceMonitor in gitops/apps/kube-prometheus-stack.yaml.
+# Idempotent -- no restart when the drop-in is already in desired state.
+#
+# Usage (from ansible/): ansible-playbook etcd-metrics.yml -K
+- name: Expose k3s embedded etcd metrics
+  hosts: k3s_servers
+  become: true
+  gather_facts: false
+  serial: 1
+  tasks:
+    - name: Ensure k3s config drop-in directory exists
+      ansible.builtin.raw: mkdir -p /etc/rancher/k3s/config.yaml.d
+      changed_when: false
+
+    - name: Ensure etcd-expose-metrics drop-in
+      ansible.builtin.raw: |
+        umask 077
+        desired=$(mktemp)
+        cat > "$desired" << 'EOF'
+        etcd-expose-metrics: true
+        EOF
+        dest=/etc/rancher/k3s/config.yaml.d/20-etcd-metrics.yaml
+        if cmp -s "$desired" "$dest" 2>/dev/null; then
+          rm -f "$desired"
+          echo UNCHANGED
+        else
+          mv "$desired" "$dest"
+          chmod 600 "$dest"
+          echo CHANGED
+        fi
+      register: metrics_result
+      changed_when: metrics_result.stdout | trim == 'CHANGED'
+
+    - name: Restart k3s server (on change)
+      when: metrics_result is changed
+      ansible.builtin.raw: systemctl restart k3s.service
+
+    - name: Wait for node Ready (on change)
+      when: metrics_result is changed
+      ansible.builtin.raw: >
+        until /usr/local/bin/k3s kubectl get node {{ inventory_hostname }}
+        -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}'
+        2>/dev/null | grep -qx True; do sleep 5; done
+      changed_when: false

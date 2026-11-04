@@ -1,0 +1,25 @@
+---
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: vps
+  namespace: argocd
+spec:
+  description: Workloads on the Hetzner VPS single-node k3s cluster (reached over the FritzBox WireGuard tunnel)
+  sourceRepos:
+    - https://gitlab.com/dan361/homelab-ops.git
+    - https://charts.external-secrets.io
+    - https://bitnami.github.io/sealed-secrets
+    - https://meilisearch.github.io/meilisearch-kubernetes
+    - https://prometheus-community.github.io/helm-charts
+    - code.forgejo.org/forgejo-helm
+    - https://vmware-tanzu.github.io/helm-charts
+  destinations:
+    - server: https://10.99.0.1:6443
+      namespace: '*'
+  clusterResourceWhitelist:
+    - group: '*'
+      kind: '*'
+  namespaceResourceWhitelist:
+    - group: '*'
+      kind: '*'

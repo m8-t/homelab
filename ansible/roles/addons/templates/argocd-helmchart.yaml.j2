@@ -1,0 +1,38 @@
+apiVersion: helm.cattle.io/v1
+kind: HelmChart
+metadata:
+  name: argocd
+  namespace: kube-system
+spec:
+  repo: https://argoproj.github.io/argo-helm
+  chart: argo-cd
+  version: "{{ addons_argocd_chart_version }}"
+  targetNamespace: argocd
+  createNamespace: true
+  valuesContent: |-
+    configs:
+      params:
+        server.insecure: true
+    server:
+      resources:
+        requests:
+          cpu: 50m
+          memory: 256Mi
+        limits:
+          memory: 512Mi
+    repoServer:
+      resources:
+        requests:
+          cpu: 50m
+          memory: 256Mi
+        limits:
+          memory: 512Mi
+    applicationSet:
+      resources:
+        requests:
+          cpu: 20m
+          memory: 64Mi
+        limits:
+          memory: 128Mi
+    notifications:
+      enabled: false

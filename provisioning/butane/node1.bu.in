@@ -1,0 +1,144 @@
+variant: fcos
+version: 1.5.0
+
+passwd:
+  users:
+    - name: root
+      ssh_authorized_keys:
+        - @@SSH_PUBKEY@@
+    - name: dan
+      no_create_home: true
+      password_hash: "@@PASSWORD_HASH@@"
+
+storage:
+  files:
+    - path: /etc/hostname
+      mode: 0644
+      overwrite: true
+      contents:
+        inline: node1
+
+    - path: /etc/NetworkManager/system-connections/eth0.nmconnection
+      mode: 0600
+      contents:
+        inline: |
+          [connection]
+          id=eth0
+          type=ethernet
+
+          [ethernet]
+
+          [ipv4]
+          method=manual
+          addresses=172.16.20.82/24
+          gateway=172.16.20.10
+          dns=172.16.20.10
+
+          [ipv6]
+          method=disabled
+
+    - path: /etc/sudoers.d/dan
+      mode: 0440
+      contents:
+        inline: |
+          Defaults:dan !targetpw
+          dan ALL=(ALL) ALL
+
+    - path: /etc/profile.d/aliases.sh
+      mode: 0644
+      contents:
+        inline: |
+          alias k='kubectl'
+          alias journalctl='journalctl --no-pager'
+
+    - path: /etc/sysctl.d/99-k3s.conf
+      mode: 0644
+      contents:
+        inline: |
+          net.ipv4.ip_forward=1
+
+systemd:
+  units:
+    - name: transactional-update.timer
+      mask: true
+    - name: firewalld.service
+      enabled: false
+      mask: true
+    - name: jeos-firstboot.service
+      enabled: false
+      mask: true
+    - name: iscsid.service
+      enabled: true
+    - name: growdisk.service
+      enabled: true
+      contents: |
+        [Unit]
+        Description=Expand root partition to fill disk (runs once on first boot)
+        After=local-fs.target
+        ConditionPathExists=!/var/lib/growdisk-done
+
+        [Service]
+        Type=oneshot
+        ExecStart=/bin/bash -c 'sfdisk --delete /dev/mmcblk0 3 && \
+          echo ", +" | sfdisk --force --no-reread -N 2 /dev/mmcblk0 && \
+          touch /var/lib/growdisk-done && \
+          reboot'
+
+        [Install]
+        WantedBy=multi-user.target
+    - name: firstboot-packages.service
+      enabled: true
+      contents: |
+        [Unit]
+        Description=Install k3s dependencies on first boot
+        ConditionPathExists=!/var/lib/firstboot-packages-done
+        ConditionPathExists=/var/lib/growdisk-done
+        After=network-online.target
+        Wants=network-online.target
+
+        [Service]
+        Type=oneshot
+        ExecStart=/bin/bash -c 'btrfs filesystem resize max /var && \
+          mkdir -p /home/dan/.ssh && \
+          echo "@@SSH_PUBKEY@@" > /home/dan/.ssh/authorized_keys && \
+          chmod 700 /home/dan/.ssh && chmod 600 /home/dan/.ssh/authorized_keys && \
+          chown -R dan: /home/dan && \
+          transactional-update pkg install -y \
+          open-iscsi nfs-client bash-completion curl && \
+          touch /var/lib/firstboot-packages-done && \
+          reboot'
+
+        [Install]
+        WantedBy=multi-user.target
+    - name: install-k3s-agent.path
+      enabled: true
+      contents: |
+        [Unit]
+        Description=Watch for k3s agent token
+
+        [Path]
+        PathExists=/var/lib/k3s-agent-token
+
+        [Install]
+        WantedBy=multi-user.target
+    - name: install-k3s-agent.service
+      contents: |
+        [Unit]
+        Description=Install k3s agent (triggered by token drop-file)
+        After=network-online.target firstboot-packages.service
+        Wants=network-online.target
+        ConditionPathExists=/var/lib/k3s-agent-token
+        ConditionPathExists=!/usr/local/bin/k3s
+
+        [Service]
+        Type=oneshot
+        RemainAfterExit=yes
+        TimeoutStartSec=600
+        EnvironmentFile=/var/lib/k3s-agent-token
+        Environment="INSTALL_K3S_VERSION=@@K3S_VERSION@@"
+        ExecStartPre=/bin/bash -c 'until timedatectl show --property=NTPSynchronized --value 2>/dev/null | grep -q yes; do sleep 5; done'
+        ExecStart=/bin/bash -c 'curl -sfL https://get.k3s.io -o /tmp/k3s-agent.sh && sh /tmp/k3s-agent.sh'
+        ExecStartPost=systemctl reboot
+
+        [Install]
+        WantedBy=multi-user.target

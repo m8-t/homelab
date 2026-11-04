@@ -1,0 +1,140 @@
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboard-envoy
+  namespace: monitoring
+  labels:
+    grafana_dashboard: "1"
+  annotations:
+    grafana_folder: Infrastructure
+data:
+  envoy.json: |
+    {
+      "title": "Envoy Gateway",
+      "uid": "homelab-envoy",
+      "timezone": "browser",
+      "refresh": "30s",
+      "time": { "from": "now-1h", "to": "now" },
+      "panels": [
+        {
+          "title": "Request Rate by Host",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+          "datasource": { "type": "prometheus" },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "reqps",
+              "custom": { "fillOpacity": 10 }
+            }
+          },
+          "targets": [
+            {
+              "expr": "sum by (envoy_http_conn_manager_prefix) (rate(envoy_http_downstream_rq_total[5m]))",
+              "legendFormat": "{{ envoy_http_conn_manager_prefix }}"
+            }
+          ]
+        },
+        {
+          "title": "Active Connections",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+          "datasource": { "type": "prometheus" },
+          "fieldConfig": {
+            "defaults": {
+              "custom": { "fillOpacity": 10 }
+            }
+          },
+          "targets": [
+            {
+              "expr": "sum by (envoy_http_conn_manager_prefix) (envoy_http_downstream_cx_active)",
+              "legendFormat": "{{ envoy_http_conn_manager_prefix }}"
+            }
+          ]
+        },
+        {
+          "title": "Response Codes (2xx)",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 8, "x": 0, "y": 8 },
+          "datasource": { "type": "prometheus" },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "reqps",
+              "color": { "fixedColor": "green", "mode": "fixed" },
+              "custom": { "fillOpacity": 10 }
+            }
+          },
+          "targets": [
+            {
+              "expr": "sum by (envoy_http_conn_manager_prefix) (rate(envoy_http_downstream_rq_xx{envoy_response_code_class=\"2\"}[5m]))",
+              "legendFormat": "{{ envoy_http_conn_manager_prefix }}"
+            }
+          ]
+        },
+        {
+          "title": "Response Codes (4xx)",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 8, "x": 8, "y": 8 },
+          "datasource": { "type": "prometheus" },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "reqps",
+              "color": { "fixedColor": "yellow", "mode": "fixed" },
+              "custom": { "fillOpacity": 10 }
+            }
+          },
+          "targets": [
+            {
+              "expr": "sum by (envoy_http_conn_manager_prefix) (rate(envoy_http_downstream_rq_xx{envoy_response_code_class=\"4\"}[5m]))",
+              "legendFormat": "{{ envoy_http_conn_manager_prefix }}"
+            }
+          ]
+        },
+        {
+          "title": "Response Codes (5xx)",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 8, "x": 16, "y": 8 },
+          "datasource": { "type": "prometheus" },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "reqps",
+              "color": { "fixedColor": "red", "mode": "fixed" },
+              "custom": { "fillOpacity": 10 }
+            }
+          },
+          "targets": [
+            {
+              "expr": "sum by (envoy_http_conn_manager_prefix) (rate(envoy_http_downstream_rq_xx{envoy_response_code_class=\"5\"}[5m]))",
+              "legendFormat": "{{ envoy_http_conn_manager_prefix }}"
+            }
+          ]
+        },
+        {
+          "title": "Request Duration P50 / P95 / P99",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 24, "x": 0, "y": 16 },
+          "datasource": { "type": "prometheus" },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "ms",
+              "custom": { "fillOpacity": 5 }
+            }
+          },
+          "targets": [
+            {
+              "expr": "histogram_quantile(0.50, sum by (le) (rate(envoy_http_downstream_rq_time_bucket[5m])))",
+              "legendFormat": "P50"
+            },
+            {
+              "expr": "histogram_quantile(0.95, sum by (le) (rate(envoy_http_downstream_rq_time_bucket[5m])))",
+              "legendFormat": "P95"
+            },
+            {
+              "expr": "histogram_quantile(0.99, sum by (le) (rate(envoy_http_downstream_rq_time_bucket[5m])))",
+              "legendFormat": "P99"
+            }
+          ]
+        }
+      ],
+      "schemaVersion": 39
+    }

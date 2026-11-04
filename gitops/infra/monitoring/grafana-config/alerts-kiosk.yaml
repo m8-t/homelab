@@ -1,0 +1,113 @@
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-alerts-kiosk
+  namespace: monitoring
+  labels:
+    grafana_alert: "1"
+data:
+  kiosk-alerts.yaml: |
+    apiVersion: 1
+    groups:
+      - orgId: 1
+        name: kiosk-alerts
+        folder: Alerts
+        interval: 1m
+        rules:
+          # notify=once routes to the policy with a 1-year repeat_interval,
+          # so this notifies once per outage (plus the resolve message).
+          - uid: kiosk-tablet-offline
+            title: Kiosk Tablet Offline
+            noDataState: Alerting
+            execErrState: KeepLast
+            condition: B
+            data:
+              - refId: A
+                relativeTimeRange:
+                  from: 300
+                  to: 0
+                datasourceUid: prometheus
+                model:
+                  expr: 'up{job="kiosk-tablet"}'
+                  instant: true
+                  refId: A
+              - refId: B
+                datasourceUid: __expr__
+                model:
+                  type: threshold
+                  expression: A
+                  conditions:
+                    - evaluator:
+                        type: lt
+                        params: [1]
+                  refId: B
+            for: 2h
+            labels:
+              severity: warning
+              notify: once
+            annotations:
+              summary: 'Kiosk tablet exporter unreachable for 2h (172.16.20.40:9100)'
+
+          # Offline is covered above, so missing data does not alert here.
+          - uid: kiosk-battery-hot
+            title: Kiosk Tablet Battery Hot
+            noDataState: OK
+            execErrState: KeepLast
+            condition: B
+            data:
+              - refId: A
+                relativeTimeRange:
+                  from: 300
+                  to: 0
+                datasourceUid: prometheus
+                model:
+                  expr: 'termux_battery_temperature_celsius{job="kiosk-tablet"}'
+                  instant: true
+                  refId: A
+              - refId: B
+                datasourceUid: __expr__
+                model:
+                  type: threshold
+                  expression: A
+                  conditions:
+                    - evaluator:
+                        type: gt
+                        params: [40]
+                  refId: B
+            for: 10m
+            labels:
+              severity: warning
+            annotations:
+              summary: 'Kiosk tablet battery at {{ $values.A.Value }} C'
+
+          - uid: kiosk-battery-low
+            title: Kiosk Tablet Battery Low
+            noDataState: OK
+            execErrState: KeepLast
+            condition: B
+            data:
+              - refId: A
+                relativeTimeRange:
+                  from: 300
+                  to: 0
+                datasourceUid: prometheus
+                model:
+                  expr: 'termux_battery_percent{job="kiosk-tablet"}'
+                  instant: true
+                  refId: A
+              - refId: B
+                datasourceUid: __expr__
+                model:
+                  type: threshold
+                  expression: A
+                  conditions:
+                    - evaluator:
+                        type: lt
+                        params: [30]
+                  refId: B
+            for: 5m
+            labels:
+              severity: warning
+            annotations:
+              summary: 'Kiosk tablet battery at {{ $values.A.Value }}%, put it on the charger'
