@@ -1,0 +1,27 @@
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: vps-cert-sync
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "2"
+spec:
+  project: vps
+  source:
+    repoURL: https://gitlab.com/dan361/homelab-ops.git
+    targetRevision: main
+    path: gitops/vps/infra/cert-sync
+  destination:
+    server: https://10.99.0.1:6443
+    namespace: kube-system
+  syncPolicy:
+    retry:
+      limit: 10
+      backoff:
+        duration: 30s
+        factor: 2
+        maxDuration: 10m
+    automated:
+      prune: true
+      selfHeal: true

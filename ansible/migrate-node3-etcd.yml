@@ -1,0 +1,84 @@
+---
+# Migrates node3's k3s datastore from embedded sqlite (kine) to embedded etcd
+# and configures scheduled snapshots (cluster-hardening-plan.md item 2):
+#   - local snapshot dir on the SATA SSD (k3s default)
+#
+# NAS replica and off-site upload are both handled by CronJobs in
+# gitops/infra/homelab/etcd-offsite (namespace etcd-offsite, app
+# argocd/etcd-offsite): etcd-snapshot-nas-sync mirrors to the NAS export via
+# an in-pod NFS volume, etcd-snapshot-offsite uploads to Hetzner bucket
+# m8t-etcd with client-side encryption via rclone crypt. k3s's built-in
+# etcd-s3 upload is intentionally not used: it cannot encrypt (k3s#14002)
+# and sharing m8t-k3s broke the Velero BSL top-level directory validation.
+#
+# Prerequisites (manual, once):
+#   - copy /var/lib/rancher/k3s/server/token to Vaultwarden + an offline copy
+#     (required to decrypt snapshots during a cluster-reset restore)
+#
+# Usage:
+#   ansible-playbook ansible/migrate-node3-etcd.yml -K
+#
+# Restore (new node, same k3s version):
+#   k3s server --cluster-reset --cluster-reset-restore-path=<snapshot> \
+#     plus the saved server token; then rejoin agents.
+- name: Migrate node3 datastore to embedded etcd with scheduled snapshots
+  hosts: node3
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Check whether etcd datastore already exists
+      ansible.builtin.raw: test -d /var/lib/rancher/k3s/server/db/etcd && echo present || echo absent
+      register: etcd_state
+      changed_when: false
+
+    - name: Back up sqlite datastore (pre-migration safety copy)
+      ansible.builtin.raw: >
+        cp -a /var/lib/rancher/k3s/server/db
+        /var/lib/rancher/k3s/server/db.sqlite-backup-$(date +%Y%m%d)
+      changed_when: true
+      when: "'absent' in etcd_state.stdout"
+
+    - name: Create k3s config drop-in directory
+      ansible.builtin.raw: mkdir -p /etc/rancher/k3s/config.yaml.d
+      changed_when: false
+
+    - name: Write etcd + snapshot config drop-in
+      ansible.builtin.raw: |
+        umask 077
+        cat > /etc/rancher/k3s/config.yaml.d/10-etcd.yaml << 'EOF'
+        cluster-init: true
+        etcd-snapshot-schedule-cron: "0 0 * * *"
+        etcd-snapshot-retention: 12
+        EOF
+        chmod 600 /etc/rancher/k3s/config.yaml.d/10-etcd.yaml
+      changed_when: true
+
+    - name: Restart k3s (sqlite -> etcd migration happens on startup)
+      ansible.builtin.raw: systemctl restart k3s
+      changed_when: true
+
+    - name: Wait for node Ready
+      ansible.builtin.raw: >
+        /usr/local/bin/k3s kubectl wait --for=condition=Ready node/node3 --timeout=300s
+      register: etcd_node_ready
+      retries: 5
+      delay: 15
+      until: etcd_node_ready.rc == 0
+      changed_when: false
+
+    - name: Verify etcd datastore exists
+      ansible.builtin.raw: test -d /var/lib/rancher/k3s/server/db/etcd
+      changed_when: false
+
+    - name: Take a verification snapshot
+      ansible.builtin.raw: /usr/local/bin/k3s etcd-snapshot save --name migration-verify
+      changed_when: true
+
+    - name: List snapshots
+      ansible.builtin.raw: /usr/local/bin/k3s etcd-snapshot ls
+      register: etcd_snapshots
+      changed_when: false
+
+    - name: Show snapshots
+      ansible.builtin.debug:
+        msg: "{{ etcd_snapshots.stdout_lines }}"

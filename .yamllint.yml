@@ -1,0 +1,39 @@
+---
+extends: default
+
+rules:
+  line-length:
+    max: 160
+    level: warning
+    # SealedSecret resources contain encrypted base64 payloads that cannot
+    # be wrapped. Exempt them from line-length only (other rules still apply).
+    ignore: |
+      gitops/**/*.sealedsecret.yaml
+      gitops/**/*sealed-secret.yaml
+      gitops/infra/ionos-webhook/ionos-secret.yaml
+      gitops/infra/argocd-config/repo-secret.yaml
+  truthy:
+    allowed-values: ["true", "false"]
+    check-keys: false
+  braces:
+    max-spaces-inside: 1
+  comments:
+    min-spaces-from-content: 1
+  indentation:
+    spaces: 2
+    indent-sequences: true
+    check-multi-line-strings: false
+  comments-indentation: false
+  octal-values:
+    forbid-implicit-octal: true
+    forbid-explicit-octal: true
+
+ignore: |
+  .venv/
+  .cache/
+  provisioning/images/
+  provisioning/ignition/
+  ansible/sealed-secrets/
+  ansible/group_vars/all/secrets.yml
+  tls.yaml
+  tls.yml

@@ -1,0 +1,109 @@
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: yamtrack-postgres
+  namespace: yamtrack
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: nfs
+  resources:
+    requests:
+      storage: 8Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: yamtrack-postgres
+  namespace: yamtrack
+  labels:
+    app: yamtrack-postgres
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: yamtrack-postgres
+  template:
+    metadata:
+      labels:
+        app: yamtrack-postgres
+    spec:
+      securityContext:
+        runAsUser: 999
+        runAsGroup: 999
+        fsGroup: 999
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: postgres
+          image: postgres:17.11-alpine
+          securityContext:
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            # readOnlyRootFilesystem not set: official postgres entrypoint runs initdb and writes to /tmp and /var/run/postgresql
+          env:
+            - name: PGDATA
+              # subdirectory, because NFS volume root is provisioned dir and initdb refuses non-empty target
+              value: /var/lib/postgresql/data/pgdata
+            - name: POSTGRES_DB
+              value: yamtrack
+            - name: POSTGRES_USER
+              value: yamtrack
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: yamtrack-postgres
+                  key: password
+          ports:
+            - name: postgres
+              containerPort: 5432
+          readinessProbe:
+            exec:
+              command:
+                - pg_isready
+                - -U
+                - yamtrack
+                - -d
+                - yamtrack
+            initialDelaySeconds: 10
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            tcpSocket:
+              port: postgres
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            failureThreshold: 5
+          resources:
+            requests:
+              cpu: 20m
+              memory: 128Mi
+            limits:
+              memory: 512Mi
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: yamtrack-postgres
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: yamtrack-postgres
+  namespace: yamtrack
+spec:
+  selector:
+    app: yamtrack-postgres
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: 5432

@@ -1,0 +1,19 @@
+---
+# SealedSecret status/conditions read for debugging -- deliberately does NOT
+# include core secrets, so the SA still cannot read secret material.
+# Mirrors claude-readonly-sealedsecrets in gitops/infra/cluster/rbac.yaml (homelab).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: claude-readonly-sealedsecrets
+  labels:
+    rbac.authorization.k8s.io/aggregate-to-view: "true"
+rules:
+  - apiGroups:
+      - bitnami.com
+    resources:
+      - sealedsecrets
+    verbs:
+      - get
+      - list
+      - watch

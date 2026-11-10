@@ -1,0 +1,9 @@
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: trivy-server-tmpdir
+  namespace: trivy-system
+data:
+  # Redirect vulnerability DB scratch writes from microSD /tmp to NFS cache
+  TMPDIR: /home/scanner/.cache
