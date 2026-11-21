@@ -1,0 +1,33 @@
+# Provisioning
+provisioning/images/
+provisioning/ignition/
+provisioning/.node-token
+provisioning/kubeconfig*.yaml
+provisioning/.env
+
+# Ansible
+ansible/sealed-secrets/
+
+# TLS secrets (contain private keys -- never commit)
+tls.yaml
+tls.yml
+
+.gitleaks.toml
+
+# Claude sandbox kubeconfig
+kubeconfig
+CLAUDE.md
+
+# AdGuard plaintext config (sealed version is committed)
+gitops/infra/adguard/AdGuardHome.yaml
+
+AGENTS.md
+
+# Editor config
+.obsidian/
+
+# Python
+__pycache__/
+*.pyc
+
+

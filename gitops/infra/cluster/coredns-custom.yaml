@@ -1,0 +1,16 @@
+---
+# Imported by k3s' CoreDNS (/etc/coredns/custom/*.server). Pods resolve the
+# public hostnames to eg-public's LAN IP, so Envoy Gateway can fetch Pocket ID's
+# OIDC discovery without going out to the internet and back.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: coredns-custom
+  namespace: kube-system
+data:
+  m8t-public.server: |
+    id.m8t.io:53 radio.m8t.io:53 {
+        hosts {
+            172.16.20.113 id.m8t.io radio.m8t.io
+        }
+    }

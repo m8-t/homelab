@@ -1,0 +1,84 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: wiim-bridge
+  namespace: navidrome
+  labels:
+    app: wiim-bridge
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: wiim-bridge
+  template:
+    metadata:
+      labels:
+        app: wiim-bridge
+      annotations:
+        reloader.stakater.com/auto: "true"
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsUser: 65532
+        runAsGroup: 65532
+        runAsNonRoot: true
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: wiim-bridge
+          image: ghcr.io/m8-t/navidrome-wiim-bridge:0.15.0@sha256:f2e4e85482910919045268c11581829b7b46dd5a7a9801f7541f2ab0f8f73943
+          envFrom:
+            - configMapRef:
+                name: wiim-bridge
+            - secretRef:
+                name: wiim-bridge
+            - secretRef:
+                name: wiim-bridge-radio
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          resources:
+            requests:
+              cpu: 10m
+              memory: 64Mi
+            limits:
+              memory: 256Mi
+          ports:
+            - name: http
+              containerPort: 8098
+            - name: device
+              containerPort: 8099
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 3
+            failureThreshold: 20
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 30
+            failureThreshold: 3
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            - name: radio-state
+              mountPath: /var/lib/radio
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        - name: radio-state
+          persistentVolumeClaim:
+            claimName: wiim-bridge-radio-state

@@ -1,0 +1,149 @@
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboard-nodes
+  namespace: monitoring
+  labels:
+    grafana_dashboard: "1"
+  annotations:
+    grafana_folder: Infrastructure
+data:
+  nodes.json: |
+    {
+      "title": "Node Resources",
+      "uid": "homelab-nodes",
+      "timezone": "browser",
+      "refresh": "30s",
+      "time": { "from": "now-1h", "to": "now" },
+      "templating": {
+        "list": [
+          {
+            "name": "node",
+            "type": "query",
+            "datasource": { "type": "prometheus" },
+            "query": "label_values(node_uname_info, nodename)",
+            "includeAll": true,
+            "current": { "selected": true, "text": "All", "value": "$__all" },
+            "multi": true,
+            "refresh": 2
+          }
+        ]
+      },
+      "panels": [
+        {
+          "title": "CPU Usage",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+          "datasource": { "type": "prometheus" },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percentunit",
+              "min": 0,
+              "max": 1,
+              "custom": { "fillOpacity": 10 }
+            }
+          },
+          "targets": [
+            {
+              "expr": "1 - avg by (instance, nodename) (rate(node_cpu_seconds_total{mode=\"idle\"}[5m]) * on(instance) group_left(nodename) node_uname_info{nodename=~\"$node\"})",
+              "legendFormat": "{{ nodename }}"
+            }
+          ]
+        },
+        {
+          "title": "Memory Usage",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+          "datasource": { "type": "prometheus" },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percentunit",
+              "min": 0,
+              "max": 1,
+              "custom": { "fillOpacity": 10 }
+            }
+          },
+          "targets": [
+            {
+              "expr": "(1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) * on(instance) group_left(nodename) node_uname_info{nodename=~\"$node\"}",
+              "legendFormat": "{{ nodename }}"
+            }
+          ]
+        },
+        {
+          "title": "Disk Usage",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+          "datasource": { "type": "prometheus" },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percentunit",
+              "min": 0,
+              "max": 1,
+              "custom": { "fillOpacity": 10 }
+            }
+          },
+          "targets": [
+            {
+              "expr": "(1 - node_filesystem_avail_bytes{fstype=~\"ext4|btrfs|xfs\",mountpoint!~\"/boot.*\"} / node_filesystem_size_bytes{fstype=~\"ext4|btrfs|xfs\",mountpoint!~\"/boot.*\"}) * on(instance) group_left(nodename) node_uname_info{nodename=~\"$node\"}",
+              "legendFormat": "{{ nodename }} {{ mountpoint }}"
+            }
+          ]
+        },
+        {
+          "title": "Network Received",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+          "datasource": { "type": "prometheus" },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "Bps",
+              "custom": { "fillOpacity": 10 }
+            }
+          },
+          "targets": [
+            {
+              "expr": "rate(node_network_receive_bytes_total{device!~\"lo|cni.*|veth.*|flannel.*\"}[5m]) * on(instance) group_left(nodename) node_uname_info{nodename=~\"$node\"}",
+              "legendFormat": "{{ nodename }} {{ device }}"
+            }
+          ]
+        },
+        {
+          "title": "Network Transmitted",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+          "datasource": { "type": "prometheus" },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "Bps",
+              "custom": { "fillOpacity": 10 }
+            }
+          },
+          "targets": [
+            {
+              "expr": "rate(node_network_transmit_bytes_total{device!~\"lo|cni.*|veth.*|flannel.*\"}[5m]) * on(instance) group_left(nodename) node_uname_info{nodename=~\"$node\"}",
+              "legendFormat": "{{ nodename }} {{ device }}"
+            }
+          ]
+        },
+        {
+          "title": "Load Average (1m)",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
+          "datasource": { "type": "prometheus" },
+          "fieldConfig": {
+            "defaults": {
+              "custom": { "fillOpacity": 10 }
+            }
+          },
+          "targets": [
+            {
+              "expr": "node_load1 * on(instance) group_left(nodename) node_uname_info{nodename=~\"$node\"}",
+              "legendFormat": "{{ nodename }}"
+            }
+          ]
+        }
+      ],
+      "schemaVersion": 39
+    }

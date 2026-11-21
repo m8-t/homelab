@@ -1,0 +1,27 @@
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: velero-volume-policy
+  namespace: velero
+data:
+  policy.yaml: |
+    version: v1
+    volumePolicies:
+    - conditions:
+        capacity: "500Gi,"
+      action:
+        type: skip
+    # navidrome-mixes: radio-mixer output, regenerable, lives on the NAS
+    - conditions:
+        nfs:
+          server: 172.16.20.5
+          path: /danscrib/musik/Mixes
+      action:
+        type: skip
+    # navidrome-mixes-mp3: regenerable tape cache on a dynamic nfs PV, matched by PVC label
+    - conditions:
+        pvcLabels:
+          homelab.m8t.io/velero-skip: "true"
+      action:
+        type: skip

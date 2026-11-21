@@ -1,0 +1,468 @@
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: wiim-radio-liquidsoap
+  namespace: navidrome
+  labels:
+    app.kubernetes.io/name: wiim-radio-liquidsoap
+data:
+  radio.liq: |
+    # Pulls tracks one by one from the bridge and streams them to Icecast as MP3.
+    # A second mount, /mixes.mp3, plays the radio-mixer mixes from MIXES_DIR.
+    # Written for Liquidsoap 2.4.x.
+
+    bridge = environment.get(default="http://wiim-bridge:8098", "RADIO_BRIDGE_URL")
+    token = environment.get("BRIDGE_RADIO_TOKEN")
+
+    # Measure each track's loudness (LUFS) when it is decoded; the files carry no ReplayGain tags.
+    enable_lufs_track_gain_metadata()
+
+    # null means "nothing now, ask again after retry_delay".
+    def next_track() =
+      try
+        response =
+          http.get(
+            headers=[("Authorization", "Bearer #{token}")],
+            timeout=15.,
+            "#{bridge}/radio/next"
+          )
+        if
+          response.status_code == 200
+        then
+          request.create(string.trim(response))
+        else
+          log.important(
+            label="radio",
+            "the bridge answered #{response.status_code}"
+          )
+          null
+        end
+      catch err do
+        log.important(label="radio", "cannot reach the bridge: #{err}")
+        null
+      end
+    end
+
+    # The whole file is downloaded before it plays, so allow time for large files.
+    radio = request.dynamic(retry_delay=3., timeout=90., next_track)
+
+    # Even out loudness between tracks, then blend each track into the next.
+    radio = normalize_track_gain(radio)
+    radio = crossfade(fade_in=3., fade_out=3., radio)
+
+    # Silence instead of a dead stream while the bridge has nothing to play.
+    radio = mksafe(radio)
+
+    output.icecast(
+      %mp3(bitrate=320),
+      host=environment.get(default="wiim-radio-icecast", "ICECAST_HOST"),
+      port=8000,
+      password=environment.get("ICECAST_SOURCE_PASSWORD"),
+      mount="/radio.mp3",
+      name=environment.get(default="Radio", "STREAM_NAME"),
+      description=environment.get(default="Shuffled mix", "STREAM_DESCRIPTION"),
+      genre=environment.get(default="Various", "STREAM_GENRE"),
+      radio
+    )
+
+    # Mixes: $MIXES_DIR/<folder>/mix.mp3 (mix.flac in folders rendered before mp3 became the
+    # default). Folders starting with "." are radio-mixer temp dirs. Newest mix first, then a
+    # shuffle bag; mixes that appear later play next.
+    mixes_dir = environment.get(default="/mixes", "MIXES_DIR")
+    mixes_seen = ref(([] : [string]))
+    mixes_bag = ref(([] : [string]))
+    mixes_last = ref("")
+    mixes_first = ref(true)
+
+    def mixes_newer_first(a, b) =
+      ta = file.mtime(a)
+      tb = file.mtime(b)
+      if
+        ta > tb
+      then
+        -1
+      elsif ta < tb then
+        1
+      elsif a > b then
+        -1
+      elsif a < b then
+        1
+      else
+        0
+      end
+    end
+
+    def mixes_file(n) =
+      dir = path.concat(mixes_dir, n)
+      mp3 = path.concat(dir, "mix.mp3")
+      if file.exists(mp3) then mp3 else path.concat(dir, "mix.flac") end
+    end
+
+    # Paths of all complete mixes, newest first.
+    def mixes_list() =
+      try
+        names = file.ls(mixes_dir)
+        names = list.filter(fun (n) -> not string.contains(prefix=".", n), names)
+        paths = list.map(mixes_file, names)
+        paths = list.filter(fun (p) -> file.exists(p), paths)
+        list.sort(mixes_newer_first, paths)
+      catch err do
+        log.important(label="mixes", "cannot list #{mixes_dir}: #{err}")
+        []
+      end
+    end
+
+    def mixes_choose(mixes) =
+      known = mixes_seen()
+      fresh = list.filter(fun (p) -> not list.mem(p, known), mixes)
+      mixes_seen := list.append(fresh, known)
+      pick = ref("")
+      if
+        mixes_first()
+      then
+        mixes_first := false
+        pick := list.hd(mixes)
+        mixes_bag := list.shuffle(list.filter(fun (p) -> p != pick(), mixes))
+      elsif not list.is_empty(fresh) then
+        pick := list.hd(fresh)
+        mixes_bag := list.filter(fun (p) -> p != pick(), mixes_bag())
+      else
+        bag = list.filter(fun (p) -> list.mem(p, mixes), mixes_bag())
+        bag =
+          if
+            list.is_empty(bag)
+          then
+            fill = list.shuffle(mixes)
+            if
+              list.length(fill) > 1 and list.hd(fill) == mixes_last()
+            then
+              list.append(list.tl(fill), [list.hd(fill)])
+            else
+              fill
+            end
+          else
+            bag
+          end
+        pick := list.hd(bag)
+        mixes_bag := list.tl(bag)
+      end
+      mixes_last := pick()
+      pick()
+    end
+
+    def next_mix() =
+      try
+        mixes = mixes_list()
+        if
+          list.is_empty(mixes)
+        then
+          null
+        else
+          file_name = mixes_choose(mixes)
+          log.important(label="mixes", "next mix: #{file_name}")
+          # The mixes are mastered and an hour long: skip the LUFS pre-scan.
+          # Fall back to the folder name when the FLAC has no title tag.
+          tags = file.metadata(exclude=["lufs_track_gain"], file_name)
+          uri =
+            if
+              tags["title"] == ""
+            then
+              "annotate:title=#{string.quote(path.basename(path.dirname(file_name)))}:#{
+                file_name
+              }"
+            else
+              file_name
+            end
+          request.create(excluded_metadata_resolvers=["lufs_track_gain"], uri)
+        end
+      catch err do
+        log.important(label="mixes", "cannot pick a mix: #{err}")
+        null
+      end
+    end
+
+    mixes = request.dynamic(retry_delay=10., next_mix)
+
+    # Now playing: the mix on air, when it started, and a filtered copy of its mix.json.
+    # Only title, date, duration and per-track start/artist/title/bpm/camelot are published.
+    now_id = ref((null : string?))
+    now_start = ref(0.)
+    now_json = ref("")
+    now_cover = ref("")
+    now_cover_mime = ref("")
+
+    def mixes_read_info(dir, mix_id) =
+      def parse(raw) =
+        let json.parse (info :
+          {
+            title : string?,
+            date : string?,
+            duration_seconds : float?,
+            tracks :
+              [
+                {
+                  start_seconds : float,
+                  artist : string?,
+                  title : string?,
+                  analysis : {bpm : float?, camelot : string?}?
+                }
+              ]
+          }
+        ) = raw
+        {
+          title = null.default(info.title, {mix_id}),
+          date = info.date,
+          duration_seconds = info.duration_seconds,
+          tracks =
+            list.map(
+              fun (t) ->
+                {
+                  start_seconds = t.start_seconds,
+                  artist = t.artist,
+                  title = t.title,
+                  bpm =
+                    null.case(t.analysis, {null}, fun (a) -> a.bpm),
+                  camelot =
+                    null.case(t.analysis, {null}, fun (a) -> a.camelot)
+                },
+              info.tracks
+            )
+        }
+      end
+      try
+        json.stringify(compact=true, parse(file.contents(path.concat(dir, "mix.json"))))
+      catch err do
+        log.important(label="mixes", "unusable mix.json in #{dir}: #{err}")
+        json.stringify(compact=true, {title = mix_id, tracks = ([] : [string])})
+      end
+    end
+
+    def mixes_track_started(m) =
+      file_name = m["filename"]
+      if
+        file_name != "" and file.exists(file_name)
+      then
+        dir = path.dirname(file_name)
+        mix_id = path.basename(dir)
+        # Each mix is one track, so every call is a (re)start, even of the same mix.
+        if
+          now_id() != mix_id
+        then
+          now_json := mixes_read_info(dir, mix_id)
+          # file.cover runs all metadata resolvers; the LUFS one decodes the whole hour on this
+          # clock thread, stalling the stream ~40 s until Icecast drops it.
+          cover =
+            try
+              metadata.cover(file.metadata(exclude=["lufs_track_gain"], file_name))
+            catch _ do
+              null
+            end
+          if
+            null.defined(cover)
+          then
+            now_cover := string(null.get(cover))
+            now_cover_mime := null.get(cover).mime
+          else
+            now_cover := ""
+            now_cover_mime := ""
+          end
+          now_id := mix_id
+        end
+        now_start := time()
+        log.important(label="mixes", "on air: #{mix_id}")
+      end
+    end
+
+
+    def api_now(_, response) =
+      response.header("Cache-Control", "no-store")
+      response.content_type("application/json")
+      cur = now_id()
+      if
+        null.defined(cur)
+      then
+        response.data(
+          "{\"id\":#{json.stringify(compact=true, null.get(cur))},\"elapsed\":#{
+            json.stringify(time() - now_start())
+          },\"mix\":#{now_json()}}"
+        )
+      else
+        response.data("{\"id\":null}")
+      end
+    end
+
+    def api_cover(_, response) =
+      if
+        now_cover() != ""
+      then
+        response.header("Cache-Control", "max-age=3600")
+        response.content_type(now_cover_mime())
+        response.data(now_cover())
+      else
+        response.status_code(404)
+        response.data("")
+      end
+    end
+
+    # All mixes, newest first, for the page's tape shelf. Built from mix.json only: no request or
+    # file.metadata call, whose LUFS resolver would decode every hour-long FLAC. Cached for 60 s.
+    mixes_json_cache = ref("")
+    mixes_json_at = ref(0.)
+
+    def mixes_entry(p) =
+      dir = path.dirname(p)
+      mix_id = path.basename(dir)
+      "{\"id\":#{json.stringify(compact=true, mix_id)},\"mix\":#{
+        mixes_read_info(dir, mix_id)
+      }}"
+    end
+
+    def mixes_json() =
+      now = time()
+      if
+        mixes_json_cache() == "" or now - mixes_json_at() > 60.
+      then
+        entries = list.map(mixes_entry, mixes_list())
+        body = string.concat(separator=",", entries)
+        mixes_json_cache := "{\"mixes\":[#{body}]}"
+        mixes_json_at := now
+      end
+      mixes_json_cache()
+    end
+
+    def api_mixes(_, response) =
+      response.header("Cache-Control", "no-store")
+      response.content_type("application/json")
+      response.data(mixes_json())
+    end
+
+    harbor.http.register(port=8001, method="GET", "/api/now", api_now)
+    harbor.http.register(port=8001, method="GET", "/api/cover", api_cover)
+    harbor.http.register(port=8001, method="GET", "/api/mixes", api_mixes)
+
+    mixes = crossfade(fade_in=3., fade_out=3., mixes)
+    mixes = mksafe(mixes)
+    # On the output side: crossfade drives the request source on its own clock, so a handler
+    # there fired ~90 s off. Blank (mksafe) tracks carry no filename and are ignored.
+    mixes.on_track(synchronous=true, mixes_track_started)
+
+    output.icecast(
+      %mp3(bitrate=320),
+      host=environment.get(default="wiim-radio-icecast", "ICECAST_HOST"),
+      port=8000,
+      password=environment.get("ICECAST_SOURCE_PASSWORD"),
+      mount="/mixes.mp3",
+      name=environment.get(default="Mixes", "MIXES_STREAM_NAME"),
+      description=
+        environment.get(default="Radio-mixer mixes", "MIXES_STREAM_DESCRIPTION"),
+      genre=environment.get(default="Mix", "MIXES_STREAM_GENRE"),
+      mixes
+    )
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: wiim-radio-liquidsoap
+  namespace: navidrome
+  labels:
+    app.kubernetes.io/name: wiim-radio-liquidsoap
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: wiim-radio-liquidsoap
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: wiim-radio-liquidsoap
+      annotations:
+        # restart when radio.liq or the secret changes
+        reloader.stakater.com/auto: "true"
+    spec:
+      automountServiceAccountToken: false
+      containers:
+        - name: liquidsoap
+          # Multi-arch (linux/amd64 and linux/arm64). The full image, not -minimal:
+          # the bridge hands out the original files, which need the ffmpeg decoders.
+          image: savonet/liquidsoap:v2.4.6@sha256:63966c36c5ea208ba56fac787e955502b348eb00c5c32cdd134ee5ec1d20de53
+          args: [/etc/liquidsoap/radio.liq]
+          ports:
+            - name: http
+              containerPort: 8001
+          env:
+            # The bridge's ClusterIP Service.
+            - name: RADIO_BRIDGE_URL
+              value: http://wiim-bridge:8098
+            - name: ICECAST_HOST
+              value: wiim-radio-icecast
+            - name: STREAM_NAME
+              value: Navidrome
+            - name: STREAM_DESCRIPTION
+              value: Shuffled mix from Navidrome
+            - name: STREAM_GENRE
+              value: Various
+            - name: MIXES_DIR
+              value: /mixes
+            - name: MIXES_STREAM_NAME
+              value: Mixes
+            - name: MIXES_STREAM_DESCRIPTION
+              value: Radio-mixer mixes
+            - name: MIXES_STREAM_GENRE
+              value: Mix
+            - name: BRIDGE_RADIO_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: wiim-bridge-radio
+                  key: BRIDGE_RADIO_TOKEN
+            - name: ICECAST_SOURCE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: wiim-bridge-radio
+                  key: ICECAST_SOURCE_PASSWORD
+          readinessProbe:
+            tcpSocket:
+              port: http
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - name: script
+              mountPath: /etc/liquidsoap
+              readOnly: true
+            - name: mixes
+              mountPath: /mixes
+              readOnly: true
+      volumes:
+        - name: script
+          configMap:
+            name: wiim-radio-liquidsoap
+        - name: mixes
+          persistentVolumeClaim:
+            claimName: navidrome-mixes
+            readOnly: true
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: wiim-radio-liquidsoap
+  namespace: navidrome
+  labels:
+    app.kubernetes.io/name: wiim-radio-liquidsoap
+spec:
+  selector:
+    app.kubernetes.io/name: wiim-radio-liquidsoap
+  ports:
+    - name: http
+      port: 8001
+      targetPort: http
