@@ -1,0 +1,83 @@
+---
+# Internet-facing Gateway (FritzBox forwards 80/443 here). Serves only
+# radio.m8t.io and id.m8t.io, and only routes from namespaces labelled
+# m8t.io/public: "true". Other hostnames match no listener: no route, no app.
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: eg-public
+  namespace: envoy-gateway-system
+  annotations:
+    metallb.universe.tf/loadBalancerIPs: "172.16.20.113"
+spec:
+  gatewayClassName: envoy
+  infrastructure:
+    parametersRef:
+      group: gateway.envoyproxy.io
+      kind: EnvoyProxy
+      name: eg-public
+  listeners:
+    - name: http
+      protocol: HTTP
+      port: 80
+      allowedRoutes:
+        namespaces:
+          from: Same
+    - name: https-radio
+      protocol: HTTPS
+      port: 443
+      hostname: radio.m8t.io
+      tls:
+        mode: Terminate
+        certificateRefs:
+          - group: ""
+            kind: Secret
+            name: wildcard-tls
+      allowedRoutes:
+        namespaces:
+          from: Selector
+          selector:
+            matchLabels:
+              m8t.io/public: "true"
+    - name: https-id
+      protocol: HTTPS
+      port: 443
+      hostname: id.m8t.io
+      tls:
+        mode: Terminate
+        certificateRefs:
+          - group: ""
+            kind: Secret
+            name: wildcard-tls
+      allowedRoutes:
+        namespaces:
+          from: Selector
+          selector:
+            matchLabels:
+              m8t.io/public: "true"
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: public-http-to-https-redirect
+  namespace: envoy-gateway-system
+spec:
+  parentRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: eg-public
+      namespace: envoy-gateway-system
+      sectionName: http
+  hostnames:
+    - radio.m8t.io
+    - id.m8t.io
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      filters:
+        - type: RequestRedirect
+          requestRedirect:
+            scheme: https
+            statusCode: 301

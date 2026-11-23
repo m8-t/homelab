@@ -1,0 +1,147 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: navidrome
+  namespace: navidrome
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: navidrome
+  template:
+    metadata:
+      labels:
+        app: navidrome
+    spec:
+      automountServiceAccountToken: false
+      nodeSelector:
+        kubernetes.io/hostname: node3
+      securityContext:
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      initContainers:
+        - name: fetch-plugins
+          image: curlimages/curl:8.23.0
+          securityContext:
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          resources:
+            requests:
+              cpu: 5m
+              memory: 16Mi
+            limits:
+              memory: 64Mi
+          env:
+            - name: PLUGIN_LYRICS_URL
+              value: https://github.com/J0R6IT0/navidrome-lyrics-plugin/releases/download/v9.2.0/nd-lyrics.ndp
+            - name: PLUGIN_LYRICS_SHA256
+              value: 5262bfede37001fa05a63c8bbd8f39e986cbac8dcd8b2575476e8f751b4ad5c6
+          command:
+            - sh
+            - -c
+            - |
+              set -eu
+              dir=/data/plugins
+              dst="$dir/nd-lyrics.ndp"
+              tmp="$dir/.nd-lyrics.ndp.part"
+              mkdir -p -m 0700 "$dir"
+              if [ -f "$dst" ] && echo "$PLUGIN_LYRICS_SHA256  $dst" | sha256sum -c - >/dev/null 2>&1; then
+                echo "nd-lyrics.ndp up to date"
+                exit 0
+              fi
+              trap 'rm -f "$tmp"' EXIT
+              curl -fsSL --proto '=https' --retry 3 -o "$tmp" "$PLUGIN_LYRICS_URL"
+              echo "$PLUGIN_LYRICS_SHA256  $tmp" | sha256sum -c -
+              mv "$tmp" "$dst"
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: tmp
+              mountPath: /tmp
+      containers:
+        - name: navidrome
+          image: deluan/navidrome:0.64.2
+          securityContext:
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          resources:
+            requests:
+              cpu: 5m
+              memory: 256Mi
+            limits:
+              memory: 768Mi
+          ports:
+            - containerPort: 4533
+          startupProbe:
+            httpGet:
+              path: /ping
+              port: 4533
+            periodSeconds: 5
+            failureThreshold: 60
+          readinessProbe:
+            httpGet:
+              path: /ping
+              port: 4533
+            periodSeconds: 10
+            failureThreshold: 5
+          livenessProbe:
+            httpGet:
+              path: /ping
+              port: 4533
+            periodSeconds: 30
+            failureThreshold: 5
+          env:
+            - name: ND_LOGLEVEL
+              value: warn
+            - name: ND_ENABLEINSIGHTSCOLLECTOR
+              value: "false"
+            - name: ND_BASEURL
+              value: https://navidrome.m8t.io
+            - name: ND_SCANNER_SCHEDULE
+              value: "0 1 * * *"
+            - name: ND_PROMETHEUS_ENABLED
+              value: "true"
+            - name: ND_LYRICSPRIORITY
+              value: ".ttml,.yaml,.yml,.elrc,.lrc,.srt,.txt,embedded,nd-lyrics"
+            - name: ND_PLUGINS_LOGLEVEL
+              value: "info"
+            - name: ND_SESSIONTIMEOUT
+              value: "720h"
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: music
+              mountPath: /music
+              readOnly: true
+            # radio-mixer output, added as a second library in the Navidrome UI
+            - name: mixes
+              mountPath: /mixes
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: navidrome-data
+        - name: music
+          persistentVolumeClaim:
+            claimName: navidrome-music
+            readOnly: true
+        - name: mixes
+          persistentVolumeClaim:
+            claimName: navidrome-mixes
+            readOnly: true
+        - name: tmp
+          emptyDir: {}

@@ -1,0 +1,16 @@
+---
+# radio mix settings of the bridge; nfs so the bridge is not pinned to a node
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: wiim-bridge-radio-state
+  namespace: navidrome
+  labels:
+    app: wiim-bridge
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: nfs
+  resources:
+    requests:
+      storage: 64Mi

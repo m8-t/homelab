@@ -1,0 +1,47 @@
+---
+# Write-scoped SA the homelab ESO PushSecret uses to write the wildcard cert
+# into this cluster over the tunnel. create/list cannot be name-restricted, so
+# they are scoped to the kube-system namespace; get/update/patch/delete are
+# pinned to the single wildcard-tls secret.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: eso-writer
+  namespace: kube-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: eso-writer-wildcard-tls
+  namespace: kube-system
+rules:
+  - apiGroups: [""]
+    resources: [secrets]
+    verbs: [create, list]
+  - apiGroups: [""]
+    resources: [secrets]
+    resourceNames: [wildcard-tls]
+    verbs: [get, update, patch, delete]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: eso-writer-wildcard-tls
+  namespace: kube-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: eso-writer-wildcard-tls
+subjects:
+  - kind: ServiceAccount
+    name: eso-writer
+    namespace: kube-system
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: eso-writer-token
+  namespace: kube-system
+  annotations:
+    kubernetes.io/service-account.name: eso-writer
+type: kubernetes.io/service-account-token

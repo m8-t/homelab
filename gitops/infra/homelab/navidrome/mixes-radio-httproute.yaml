@@ -1,0 +1,116 @@
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: mixes-radio
+  namespace: navidrome
+spec:
+  parentRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: eg-public
+      namespace: envoy-gateway-system
+      sectionName: https-radio
+  hostnames:
+    - radio.m8t.io
+  rules:
+    - matches:
+        - path:
+            type: Exact
+            value: /mixes.mp3
+      timeouts:
+        request: "0s"
+      filters:
+        - type: ResponseHeaderModifier
+          responseHeaderModifier:
+            set:
+              - name: X-Robots-Tag
+                value: noindex, nofollow
+      backendRefs:
+        - name: wiim-radio-icecast
+          port: 8000
+    - matches:
+        - path:
+            type: Exact
+            value: /api/now
+      filters:
+        - type: ResponseHeaderModifier
+          responseHeaderModifier:
+            set:
+              - name: X-Robots-Tag
+                value: noindex, nofollow
+      backendRefs:
+        - name: wiim-radio-liquidsoap
+          port: 8001
+    - matches:
+        - path:
+            type: Exact
+            value: /api/cover
+      filters:
+        - type: ResponseHeaderModifier
+          responseHeaderModifier:
+            set:
+              - name: X-Robots-Tag
+                value: noindex, nofollow
+      backendRefs:
+        - name: wiim-radio-liquidsoap
+          port: 8001
+    - matches:
+        - path:
+            type: Exact
+            value: /api/mixes
+      filters:
+        - type: ResponseHeaderModifier
+          responseHeaderModifier:
+            set:
+              - name: X-Robots-Tag
+                value: noindex, nofollow
+      backendRefs:
+        - name: wiim-radio-liquidsoap
+          port: 8001
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /tape/
+      timeouts:
+        request: "0s"
+      filters:
+        - type: ResponseHeaderModifier
+          responseHeaderModifier:
+            set:
+              - name: X-Robots-Tag
+                value: noindex, nofollow
+      backendRefs:
+        - name: mixes-player
+          port: 8080
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      backendRefs:
+        - name: mixes-player
+          port: 8080
+---
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: SecurityPolicy
+metadata:
+  name: mixes-radio-oidc
+  namespace: navidrome
+spec:
+  targetRefs:
+    - group: gateway.networking.k8s.io
+      kind: HTTPRoute
+      name: mixes-radio
+  oidc:
+    provider:
+      issuer: https://id.m8t.io
+    clientID: f5c9b23d-7487-4fa1-9485-408ecf88f3d4
+    clientSecret:
+      name: radio-oidc
+    redirectURL: https://radio.m8t.io/oauth2/callback
+    logoutPath: /logout
+    scopes: [openid, profile, email]
+    refreshToken: true
+    defaultRefreshTokenTTL: 720h
+    cookieConfig:
+      sameSite: Lax

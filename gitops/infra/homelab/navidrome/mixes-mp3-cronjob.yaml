@@ -1,0 +1,138 @@
+# TEMPORARY: tape copies of mixes rendered before radio-mixer wrote mix.mp3 itself (FLAC-only folders); folders with a
+# mix.mp3 are skipped and served directly by mixes-player. Remove this file in one go (PVC, script, CronJob) once no
+# FLAC-only mix folder is left, together with the /tapes fallback in mixes-player (mount + try_files entry) and the
+# velero policy entry.
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: navidrome-mixes-mp3
+  namespace: navidrome
+  labels:
+    app: mixes-mp3
+    homelab.m8t.io/velero-skip: "true"
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: nfs
+  resources:
+    requests:
+      storage: 20Gi
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mixes-mp3-script
+  namespace: navidrome
+data:
+  encode.sh: |
+    #!/bin/sh
+    umask 022
+    rm -f /tapes/.tmp-*
+    found=0
+    for dir in /mixes/*/; do
+      [ -d "$dir" ] || continue
+      name=$(basename "$dir")
+      case "$name" in .*) continue ;; esac
+      src="${dir}mix.flac"
+      [ -f "$src" ] || continue
+      [ -e "${dir}mix.mp3" ] && continue
+      found=$((found + 1))
+      dst="/tapes/${name}.mp3"
+      tmp="/tapes/.tmp-${name}.mp3"
+      if [ -e "$dst" ] && ! [ "$src" -nt "$dst" ]; then
+        continue
+      fi
+      echo "encoding: $name"
+      if nice -n 10 ffmpeg -nostdin -hide_banner -loglevel warning -y -i "$src" -map 0:a:0 -map_metadata -1 \
+        -fflags +bitexact -id3v2_version 0 -write_id3v1 0 -c:a libmp3lame -b:a 320k -threads 1 -f mp3 "$tmp"; then
+        mv -f "$tmp" "$dst" && echo "done: $name"
+      else
+        echo "encode failed: $name" >&2
+        rm -f "$tmp"
+      fi
+    done
+    if [ "$found" -gt 0 ]; then
+      for mp3 in /tapes/*.mp3; do
+        [ -e "$mp3" ] || continue
+        name=$(basename "$mp3" .mp3)
+        if [ ! -e "/mixes/${name}/mix.flac" ]; then
+          echo "pruning: $name"
+          rm -f "$mp3"
+        fi
+      done
+    else
+      echo "no mix folders found, skipping prune" >&2
+    fi
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: mixes-mp3
+  namespace: navidrome
+  labels:
+    app: mixes-mp3
+spec:
+  schedule: "0 */12 * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      activeDeadlineSeconds: 10800
+      template:
+        metadata:
+          labels:
+            app: mixes-mp3
+          annotations:
+            backup.velero.io/backup-volumes-excludes: tapes
+        spec:
+          restartPolicy: Never
+          automountServiceAccountToken: false
+          securityContext:
+            runAsUser: 101
+            runAsGroup: 101
+            runAsNonRoot: true
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: ffmpeg
+              # linuxserver/ffmpeg 9.0.2-cli-ls90 (ffmpeg 9.0.2 with libmp3lame), multi-arch index digest (linux/amd64, linux/arm64)
+              image: linuxserver/ffmpeg:9.0.2-cli-ls90@sha256:66fa8e2351fb78f9dad2c59c946be2658edcc529339320da3f2cf788312368af
+              command: ["sh", "/script/encode.sh"]
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: [ALL]
+              resources:
+                requests:
+                  cpu: 100m
+                limits:
+                  cpu: "1"
+                  memory: 256Mi
+              volumeMounts:
+                - name: script
+                  mountPath: /script
+                  readOnly: true
+                - name: mixes
+                  mountPath: /mixes
+                  readOnly: true
+                - name: tapes
+                  mountPath: /tapes
+                - name: tmp
+                  mountPath: /tmp
+          volumes:
+            - name: script
+              configMap:
+                name: mixes-mp3-script
+            - name: mixes
+              persistentVolumeClaim:
+                claimName: navidrome-mixes
+                readOnly: true
+            - name: tapes
+              persistentVolumeClaim:
+                claimName: navidrome-mixes-mp3
+            - name: tmp
+              emptyDir: {}

@@ -1,0 +1,1953 @@
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mixes-player
+  namespace: navidrome
+data:
+  default.conf: |
+    server {
+        listen 8080;
+        server_name _;
+        server_tokens off;
+        root /usr/share/nginx/html;
+
+        # style-src needs 'unsafe-inline' for the single <style> block. The only script is same-origin /app.js,
+        # which talks to /api/* and streams /mixes.mp3 on the same origin.
+        set $csp "default-src 'none'; media-src 'self'; img-src 'self'; style-src 'unsafe-inline'; font-src 'self'; ";
+        set $csp "${csp}script-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
+        add_header Content-Security-Policy $csp always;
+        add_header X-Robots-Tag "noindex, nofollow" always;
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header Referrer-Policy "no-referrer" always;
+
+        location = / {
+            index index.html;
+        }
+
+        # Target of the internal redirect from "index"; not reachable from outside.
+        location = /index.html {
+            internal;
+        }
+
+        location = /app.js {
+            default_type application/javascript;
+        }
+
+        # Static assets: a ConfigMap directory, so only plain file names (no "..data" symlinks, no subpaths).
+        # add_header in a location replaces the server-level ones, so they are repeated here.
+        location ^~ /a/ {
+            location ~ "^/a/[A-Za-z0-9][A-Za-z0-9._-]*$" {
+                add_header Cache-Control "public, max-age=86400";
+                add_header Content-Security-Policy $csp always;
+                add_header X-Robots-Tag "noindex, nofollow" always;
+                add_header X-Content-Type-Options "nosniff" always;
+                add_header Referrer-Policy "no-referrer" always;
+            }
+            return 404;
+        }
+
+        location ^~ /tape/ {
+            # radio-mixer's own mix.mp3 first; the mixes-mp3 CronJob copy for older FLAC-only mixes
+            location ~ "^/tape/([^./][^/]*)\.mp3$" {
+                root /;
+                try_files /mixes/$1/mix.mp3 /tapes/$1.mp3 =404;
+                default_type audio/mpeg;
+                add_header Cache-Control "max-age=3600";
+                add_header Content-Security-Policy $csp always;
+                add_header X-Robots-Tag "noindex, nofollow" always;
+                add_header X-Content-Type-Options "nosniff" always;
+                add_header Referrer-Policy "no-referrer" always;
+            }
+            return 404;
+        }
+
+        location / {
+            return 404;
+        }
+    }
+  index.html: |
+    <!doctype html>
+    <html lang="en">
+    <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <meta name="robots" content="noindex, nofollow">
+    <title>Mixes</title>
+    <style>
+    :root{--bg:#0f0e0d;--fg:#ece8e0;--muted:#948e85;--accent:#e0a33c}
+    *{box-sizing:border-box;margin:0}
+    body{background:radial-gradient(90% 60% at 50% 30%,#26221e 0%,var(--bg) 70%);color:var(--fg);
+    font-family:"Adwaita Sans","Liberation Sans",sans-serif;min-height:100vh;display:flex;align-items:center;
+    justify-content:center;padding:24px 16px}
+    main{width:100%;max-width:min(2000px,calc((100vh - 260px) * 2.5))}
+    @media (max-width:700px){main{max-width:none}}
+    .box{position:relative;container-type:inline-size;--vx:0;--vy:0;--vw:1920}
+    @media (max-width:700px){.box{--vx:490;--vy:100;--vw:960}}
+    #box{display:block;width:100%;height:auto;border-radius:6px;box-shadow:0 30px 60px rgba(0,0,0,.7);cursor:pointer}
+    @font-face{font-family:Caveat;font-weight:600;font-display:swap;src:url(/a/caveat-600-latin.woff2) format("woff2")}
+    .lower{display:flex;justify-content:center;align-items:flex-start;gap:80px;margin-top:26px}
+    .info{flex:0 1 560px;min-width:0}
+    .shelf{flex:0 0 460px;max-width:100%;display:flex;flex-direction:column;align-items:flex-end;
+    transform:translateX(max(0px,calc((100vw - 1140px) * .25)))}
+    .shelf svg,.shelf .pager{width:380px;max-width:100%}
+    .shelf svg{display:block;height:auto;touch-action:pan-y;-webkit-user-select:none;user-select:none}
+    .pager{display:flex;justify-content:center;align-items:center;gap:14px;margin-top:6px;font-size:12px;color:var(--muted);
+    font-variant-numeric:tabular-nums}
+    .pager button,.lnk{background:none;border:0;color:var(--muted);font:inherit;cursor:pointer;padding:2px 6px}
+    .pager button{font-size:18px;line-height:1}
+    .pager button:hover,.pager button:focus-visible,.lnk:hover,.lnk:focus-visible{color:var(--accent)}
+    .pager button:focus-visible,.lnk:focus-visible{outline:1px solid var(--accent);outline-offset:2px}
+    .pager button:disabled{opacity:.35;cursor:default;color:var(--muted)}
+    .fl{display:flex;align-items:center;gap:14px}
+    #live-btn{color:var(--accent)}
+    #live-btn:hover,#live-btn:focus-visible{color:#f0bd6a}
+    .tape{cursor:pointer;outline:none}
+    .tape>g{transition:filter .15s}
+    .layer{will-change:transform,opacity}
+    #deco{pointer-events:none}
+    .tape.hot>g{filter:brightness(1.6) drop-shadow(0 0 4px rgba(224,163,60,.45))}
+    .tape:focus-visible>g{filter:brightness(1.6) drop-shadow(0 0 4px rgba(224,163,60,.45))}
+    .tape text{font-family:Caveat,cursive,"Liberation Sans",sans-serif;font-weight:600;pointer-events:none}
+    .tape image{pointer-events:none}
+    @media (max-width:900px){.lower{flex-direction:column;align-items:center;gap:30px}.info{flex:none;width:100%;max-width:560px}
+    .shelf{flex:none;width:min(420px,100%);align-items:stretch;transform:none}.shelf svg,.shelf .pager{width:100%}}
+    dialog{margin:auto;border:0;padding:0;background:transparent;width:min(460px,calc(100vw - 20px));max-height:calc(100vh - 24px);overflow:visible;
+    color:#2b2620}
+    dialog::backdrop{background:rgba(8,7,6,.74)}
+    .jc{background:linear-gradient(#f1e8d1,#e7dcc0);border-radius:3px;box-shadow:0 24px 60px rgba(0,0,0,.65),inset 0 0 0 1px rgba(80,60,30,.25);
+    padding:18px 22px 16px;border-top:7px solid #d8502f;max-height:calc(100vh - 24px);display:flex;flex-direction:column}
+    .jc h2{font-family:Caveat,cursive,"Liberation Sans",sans-serif;font-weight:600;font-size:34px;line-height:1.05;color:#1f2a5c;
+    overflow-wrap:anywhere}
+    .jc .jm{font-size:12px;color:#6b6252;margin-top:6px;letter-spacing:.03em}
+    .jc ol{list-style:none;margin:12px 0 0;padding:10px 4px 0 0;border-top:1px solid #b9ae95;overflow:auto;min-height:0;flex:1 1 auto;
+    font-size:13px;line-height:1.35}
+    .jc li{display:flex;gap:10px;padding:2px 0}
+    .jc li .tm{flex:none;width:3.6em;color:#8a8070;font-variant-numeric:tabular-nums;text-align:right}
+    .jc li .tn{flex:none;width:1.6em;color:#a79c86;text-align:right;font-variant-numeric:tabular-nums}
+    .jc .jnote{min-height:1.3em;margin-top:10px;font-size:12px;color:#a2301a}
+    .jc .jb{display:flex;gap:10px;justify-content:flex-end;margin-top:6px}
+    .jc button{font:inherit;font-size:13px;padding:7px 16px;border-radius:3px;border:1px solid #b9ae95;background:#f6efdc;color:#2b2620;cursor:pointer}
+    .jc button:hover,.jc button:focus-visible{border-color:#8a8070;background:#fff8e6}
+    .jc button.go{background:var(--accent);border-color:#b97d1c;color:#1c1408;font-weight:600}
+    .jc button.go:hover,.jc button.go:focus-visible{background:#ecb25a}
+    .jc button:disabled{opacity:.45;cursor:default}
+    .jc dl{margin:12px 0 0;padding:10px 4px 0 0;border-top:1px solid #b9ae95;overflow:auto;min-height:0;flex:1 1 auto;font-size:13px;line-height:1.4}
+    .jc dt{font-weight:600;margin-top:10px}.jc dt:first-child{margin-top:0}
+    .jc dd{margin:2px 0 0;color:#4a4236}
+    .mix{font-size:12px;color:var(--muted);letter-spacing:.08em;text-transform:uppercase}
+    h1{font-size:24px;font-weight:600;margin-top:4px;min-height:1.2em}
+    .artist{color:var(--muted);font-size:16px;margin-top:2px;min-height:1.2em}
+    .counter{display:flex;align-items:center;gap:12px;margin-top:18px;font-variant-numeric:tabular-nums;
+    color:var(--muted);font-size:12px}
+    .bar{flex:1;height:3px;background:#36322d;border-radius:3px}
+    .bar b{display:block;height:100%;width:0;background:var(--accent);border-radius:3px}
+    .next{margin-top:18px;font-size:13px;color:var(--muted);border-top:1px solid #2c2925;padding-top:12px}
+    .next b{color:var(--fg);font-weight:500}
+    .status{margin-top:12px;font-size:12px;color:var(--accent);min-height:1.2em}
+    .foot{display:flex;justify-content:space-between;margin-top:16px;font-size:12px;color:var(--muted)}
+    .foot a{color:var(--muted);text-decoration:none}.foot a:hover{color:var(--fg)}
+    .live{color:#e0533a}
+    .tapeb{color:var(--accent);font-weight:600;letter-spacing:.1em}
+    .credit{margin-top:22px;font-size:10px;color:#6f6a63;text-align:center}
+    .credit a{color:inherit}
+    [hidden]{display:none!important}
+    .key{cursor:pointer;outline:none}
+    .khot{transition:filter .15s}
+    .khot.hot{filter:brightness(1.6) drop-shadow(0 0 4px rgba(224,163,60,.45))}
+    body.tapemode .fnr{display:none}
+    #ptr{transition:transform 1s ease}
+    .dk{position:absolute;inset:0;pointer-events:none;--u:calc(100cqw/var(--vw))}
+    .dk .stage{position:absolute;left:calc((547 - var(--vx))*var(--u));top:calc((369 - var(--vy))*var(--u));width:calc(420*var(--u));height:calc(194*var(--u));
+    perspective:calc(6500*var(--u));perspective-origin:98% 8%}
+    .dk .stage>*{position:absolute}
+    .dk .cav{inset:0;width:100%;height:100%;display:block}
+    .dk .holder{position:absolute;inset:0;transform:translateZ(calc(-4*var(--u)));clip-path:inset(0)}
+    .dk .pop{position:absolute;inset:0;will-change:transform}
+    .dk .tp{position:absolute;inset:0;width:100%;height:100%;overflow:visible;opacity:0}
+    .dk .tp.on{opacity:1}
+    .dk .door{inset:0;transform-origin:50% 100%;transform-style:preserve-3d;will-change:transform}
+    .dk .door .face{position:absolute;inset:0;width:100%;height:100%;display:block}
+    .dk .door .edge{position:absolute;left:0;right:0;top:calc(-8*var(--u));height:calc(8*var(--u));transform-origin:50% 100%;transform:rotateX(90deg);
+    background:linear-gradient(#7f8b9c 0,#4c5562 20%,#272d36 65%,#171b21 100%);opacity:0}
+    .dk .door .gloss{position:absolute;left:calc(114*var(--u));top:calc(47*var(--u));width:calc(231*var(--u));height:calc(91*var(--u));
+    background:linear-gradient(135deg,rgba(255,255,255,.10) 0,rgba(255,255,255,.02) 35%,rgba(255,255,255,.09) 55%,rgba(255,255,255,0) 70%)}
+    .dk .door .shade{position:absolute;inset:0;background:linear-gradient(rgba(2,4,10,.15),rgba(2,4,10,.5));opacity:0}
+    .dk .door .eject{position:absolute;left:calc(20*var(--u));top:calc(62*var(--u));width:calc(73*var(--u));height:calc(46*var(--u));opacity:0;
+    background:radial-gradient(closest-side,rgba(255,190,90,.55),rgba(255,190,90,0));
+    filter:brightness(1.6) drop-shadow(0 0 calc(4*var(--u)) rgba(224,163,60,.45))}
+    .dk .shadow{left:calc(10*var(--u));width:calc(400*var(--u));top:calc(194*var(--u));height:calc(34*var(--u));opacity:0;
+    background:linear-gradient(rgba(0,0,0,.95),rgba(0,0,0,.55) 40%,rgba(0,0,0,0));filter:blur(calc(1.6*var(--u)));transform-origin:50% 0}
+    @property --e{syntax:'<number>';inherits:true;initial-value:0}
+    .dk .tp .edge{transform-box:fill-box;transform-origin:50% 100%;transform:scaleY(var(--e));opacity:calc(var(--e)*1.6)}
+    .dk .sp{position:absolute;inset:0;width:100%;height:100%;overflow:visible;opacity:calc(1 - var(--e)*2.5)}
+    .dk .sp .spin,.dk .tp .hub{transform-box:fill-box;transform-origin:50% 50%;animation:spin 2s linear infinite;animation-play-state:paused}
+    .playing .dk .tp .hub,.playing .dk .sp .spin{animation-play-state:running}
+    .winding .dk .tp .hub,.winding .dk .sp .spin{animation-duration:.25s}
+    .winding.rew .dk .tp .hub,.winding.rew .dk .sp .spin{animation-direction:reverse}
+    .busy .dk .tp .hub,.busy .dk .sp .spin{animation-play-state:paused!important}
+    .dk .tp .ink{mix-blend-mode:multiply;opacity:.9}
+    .dk .topshadow{position:absolute;left:calc(60*var(--u));right:calc(30*var(--u));top:calc(-16*var(--u));height:calc(16*var(--u));
+    background:linear-gradient(rgba(0,0,0,0),rgba(0,0,0,.5));opacity:var(--e)}
+    #knob{cursor:ns-resize;touch-action:none}
+    #knob:focus,#knob:focus-visible{outline:none}
+    #knob-rot{transition:filter .15s}
+    #knob-rot.hot{filter:brightness(1.6) drop-shadow(0 0 4px rgba(224,163,60,.45))}
+    @keyframes spin{to{transform:rotate(360deg)}}
+    @media (prefers-reduced-motion:reduce){.dk .spin,.dk .hub{animation:none!important}#ptr{transition:none}}
+    </style>
+    </head>
+    <body>
+    <main>
+    <div class="box"><svg id="box" viewBox="0 0 1920 768" xmlns="http://www.w3.org/2000/svg" font-family="Liberation Sans,sans-serif">
+    <defs>
+    <clipPath id="knob-clip"><circle cx="675.5" cy="284.5" r="31"/></clipPath>
+    <clipPath id="spk-l"><circle cx="298" cy="470" r="196"/></clipPath>
+    <clipPath id="spk-r"><circle cx="1633" cy="470" r="196"/></clipPath>
+    <clipPath id="kc-play"><rect x="667" y="631" width="53" height="27" rx="2"/></clipPath>
+    <clipPath id="kc-rew"><rect x="722" y="631" width="50" height="27" rx="2"/></clipPath>
+    <clipPath id="kc-ff"><rect x="776" y="631" width="50" height="27" rx="2"/></clipPath>
+    <clipPath id="kc-stop"><rect x="827" y="631" width="50" height="27" rx="2"/></clipPath>
+    <clipPath id="kc-fn"><rect x="980" y="239" width="36" height="81" rx="2"/></clipPath>
+    <clipPath id="kc-pause"><rect x="881" y="631" width="49" height="27" rx="2"/></clipPath>
+    <filter id="soft"><feGaussianBlur stdDeviation=".6"/></filter>
+    <filter id="ink" x="-2%" y="-20%" width="104%" height="140%"><feTurbulence type="fractalNoise" baseFrequency=".035" numOctaves="2" seed="4" result="n"/>
+    <feDisplacementMap in="SourceGraphic" in2="n" scale="2.4"/></filter>
+    </defs>
+    <image href="/a/boombox.jpg" width="1920" height="768"/>
+    <image class="fnr" href="/a/fn_radio.png" x="972" y="236" width="56" height="104"/>
+    <g clip-path="url(#spk-l)"><g id="z-l"><image href="/a/boombox.jpg" width="1920" height="768"/></g></g>
+    <g clip-path="url(#spk-r)"><g id="z-r"><image href="/a/boombox.jpg" width="1920" height="768"/></g></g>
+    <g id="ptr"><g filter="url(#soft)"><rect x="839" y="153" width="6" height="12" fill="#cfd2d6"/>
+    <rect x="841.2" y="152" width="1.6" height="14" fill="#e0281c"/></g></g>
+    <g clip-path="url(#knob-clip)"><g id="knob-rot"><image href="/a/boombox.jpg" width="1920" height="768"/></g></g>
+    <g clip-path="url(#kc-play)"><g id="kh-play" class="khot"><image href="/a/boombox.jpg" width="1920" height="768"/></g></g>
+    <g clip-path="url(#kc-rew)"><g id="kh-rew" class="khot"><image href="/a/boombox.jpg" width="1920" height="768"/></g></g>
+    <g clip-path="url(#kc-ff)"><g id="kh-ff" class="khot"><image href="/a/boombox.jpg" width="1920" height="768"/></g></g>
+    <g clip-path="url(#kc-stop)"><g id="kh-stop" class="khot"><image href="/a/boombox.jpg" width="1920" height="768"/></g></g>
+    <g clip-path="url(#kc-pause)"><g id="kh-pause" class="khot"><image href="/a/boombox.jpg" width="1920" height="768"/></g></g>
+    <g clip-path="url(#kc-fn)"><g id="kh-fn" class="khot"><image href="/a/boombox.jpg" width="1920" height="768"/>
+    <image class="fnr" href="/a/fn_radio.png" x="972" y="236" width="56" height="104"/></g></g>
+    <g id="pressed" style="display:none"><rect x="667" y="631" width="53" height="27" rx="2" fill="#000" opacity=".45"/>
+    <rect x="667" y="631" width="53" height="3" fill="#000" opacity=".6"/></g>
+    <g id="pressed-pause" style="display:none"><rect x="881" y="631" width="49" height="27" rx="2" fill="#000" opacity=".45"/>
+    <rect x="881" y="631" width="49" height="3" fill="#000" opacity=".6"/></g>
+    <g id="pressed-rew" style="display:none"><rect x="722" y="631" width="50" height="27" rx="2" fill="#000" opacity=".45"/>
+    <rect x="722" y="631" width="50" height="3" fill="#000" opacity=".6"/></g>
+    <g id="pressed-ff" style="display:none"><rect x="776" y="631" width="50" height="27" rx="2" fill="#000" opacity=".45"/>
+    <rect x="776" y="631" width="50" height="3" fill="#000" opacity=".6"/></g>
+    <rect id="hit-all" width="1920" height="768" fill="transparent"/>
+    <rect id="key-play" class="key" x="667" y="631" width="53" height="27" fill="transparent" role="button" tabindex="0" aria-label="Play"/>
+    <rect id="key-stop" class="key" x="827" y="631" width="50" height="27" fill="transparent" role="button" tabindex="0" aria-label="Stop"/>
+    <rect id="key-rew" class="key" x="722" y="631" width="50" height="27" fill="transparent" role="button" tabindex="0" aria-label="Rewind"/>
+    <rect id="key-ff" class="key" x="776" y="631" width="50" height="27" fill="transparent" role="button" tabindex="0" aria-label="Fast forward"/>
+    <rect id="key-pause" class="key" x="881" y="631" width="49" height="27" fill="transparent"
+     role="button" tabindex="0" aria-label="Pause" aria-pressed="false"/>
+    <rect id="key-fn" class="key" x="978" y="236" width="40" height="86" fill="transparent" role="button" tabindex="0"
+     aria-label="Function switch: radio or tape"/>
+    <circle id="knob" class="key" cx="675.5" cy="284.5" r="34" fill="transparent" role="slider" tabindex="0" aria-label="Volume"
+     aria-orientation="vertical"/>
+    </svg>
+    <div class="dk" id="dk" aria-hidden="true"><div class="stage">
+    <img class="cav" src="/a/cavity.jpg" alt="">
+    <div class="shadow" id="dk-shadow"></div>
+    <div class="door" id="dk-door">
+    <div class="holder" id="dk-holder"><div class="pop" id="dk-pop"></div>
+    <svg class="sp" viewBox="0 0 420 194"><image class="spin" href="/a/spindle.webp" x="155" y="73" width="28" height="28"/>
+    <image class="spin" href="/a/spindle.webp" x="280" y="73" width="28" height="28"/></svg>
+    <div class="topshadow"></div></div>
+    <div class="edge" id="dk-edge"></div>
+    <img class="face" src="/a/door.webp" alt="">
+    <div class="gloss"></div>
+    <div class="shade" id="dk-shade"></div>
+    <div class="eject" id="dk-eject"></div>
+    </div></div></div>
+    </div>
+    <div class="lower">
+    <div class="info">
+    <div class="mix" id="mix">Mixes</div>
+    <h1 id="title"></h1>
+    <div class="artist" id="meta"></div>
+    <div class="counter"><span id="t-el"></span><div class="bar"><b id="bar"></b></div><span id="t-tot"></span></div>
+    <div class="next" id="next" hidden>Up next: <b id="next-b"></b></div>
+    <div class="status" id="status" role="status" aria-live="polite"></div>
+    <div class="foot"><span class="fl"><span id="badge" class="live">&#9679; Live</span>
+    <button type="button" class="lnk" id="live-btn" hidden>Back to live</button></span>
+    <span class="fl"><button type="button" class="lnk" id="help-btn" aria-haspopup="dialog">Help</button><a href="/logout">Log out</a></span></div>
+    <div class="credit">Photo: <a href="https://commons.wikimedia.org/wiki/File:Radio_Sanyo_M_W170L.JPG"
+     rel="noopener noreferrer">MrSpectre / Wikimedia Commons</a>,
+    <a href="https://creativecommons.org/licenses/by-sa/3.0/" rel="noopener noreferrer">CC BY-SA 3.0</a>, modified</div>
+    </div>
+    <div class="shelf" id="shelf">
+    <svg id="rack" viewBox="0 0 1 1" xmlns="http://www.w3.org/2000/svg" role="group" aria-label="Tape carousel"></svg>
+    <div class="pager" id="pager" hidden>
+    <button type="button" id="pg-prev" aria-label="Turn left" title="Turn left">&#8249;</button><span id="pg-n" aria-live="polite"></span>
+    <button type="button" id="pg-next" aria-label="Turn right" title="Turn right">&#8250;</button>
+    </div>
+    </div>
+    </div>
+    </main>
+    <dialog id="card" aria-labelledby="card-title"><div class="jc" id="card-in">
+    <h2 id="card-title"></h2>
+    <div class="jm" id="card-meta"></div>
+    <ol id="card-tracks"></ol>
+    <div class="jnote" id="card-note" role="status" aria-live="polite"></div>
+    <div class="jb"><button type="button" id="card-cancel">Cancel</button><button type="button" class="go" id="card-go" disabled>Insert tape</button></div>
+    </div></dialog>
+    <dialog id="help" aria-labelledby="help-title"><div class="jc">
+    <h2 id="help-title">How it works</h2>
+    <dl>
+    <dt>&#9679; Live</dt>
+    <dd>The radio plays the mixes nonstop, newest first. Everyone hears the same spot, so you may join in the middle of a mix.</dd>
+    <dt>PLAY / PAUSE / STOP</dt>
+    <dd>Start, pause and stop. After a pause, live picks up where the radio is now; a tape continues where you left it.
+    STOP keeps the tape in the deck.</dd>
+    <dt>REW / FF</dt>
+    <dd>Jump to the previous or next track. This turns the mix into your own tape (TAPE mode), the radio goes on without you.</dd>
+    <dt>FUNCTION switch</dt>
+    <dd>Click it to change between RADIO (live) and TAPE. TAPE keeps the current mix playing as your own tape from the same spot.</dd>
+    <dt>VOLUME knob</dt>
+    <dd>Drag up or down, use the mouse wheel, or the arrow keys.</dd>
+    <dt>Tape carousel</dt>
+    <dd>Click a tape to see its tracklist. &ldquo;Insert tape&rdquo; plays that mix from the start in TAPE mode.
+    Turn the carousel to reach older mixes: use the arrow buttons below it, swipe sideways on a touch screen,
+    or press the Left and Right arrow keys while a tape is focused.</dd>
+    <dt>Back to live</dt>
+    <dd>Leaves TAPE mode and returns to the radio. At the end of a tape the deck stops by itself.</dd>
+    <dt>Dial pointer</dt>
+    <dd>Shows how far the mix has played.</dd>
+    </dl>
+    <div class="jb"><button type="button" class="go" id="help-close">Close</button></div>
+    </div></dialog>
+    <audio id="audio" preload="none" hidden></audio>
+    <script src="/app.js"></script>
+    </body>
+    </html>
+  app.js: |
+    'use strict';
+    const $ = (id) => document.getElementById(id);
+
+    const PTR_X0 = 842;
+    const PTR_SPAN = 250;
+    const SPEAKERS = [[298, 470], [1633, 470]];
+
+    const KNOB = { cx: 675.5, cy: 284.5, photoDeg: -118, minDeg: -145, maxDeg: 145, dragPx: 200, step: 0.05, def: 0.8 };
+    const VOL_KEY = 'mixes.volume';
+    const GAIN_RAMP = 0.02;
+
+    const WIND_MS = 2500;
+    const WIND_MAX_MS = 10000;
+    const WATCHDOG_MS = 12000;
+    const BACKOFF_S = [2, 4, 8, 16, 30];
+
+    // Tape-deck fast wind, tuned by ear: levels are relative to the master gain, frequencies in Hz.
+    const WIND = {
+      level: 0.5,
+      clunkHz: [120, 45], clunkS: 0.09, clunkGain: 0.9, clickS: 0.012, clickGain: 0.5,
+      noiseHz: [700, 2400], noiseQ: 0.7, noiseGain: 0.28, noiseRampS: 0.15,
+      whineHz: { ff: [170, 560], rew: [140, 430] }, whineRampS: { ff: 2.2, rew: 2.6 }, whineGain: 0.05, whineLowpass: 1400,
+      fadeS: 0.12, endClunkDelayS: 0.05, killS: 0.5,
+    };
+
+    const audio = $('audio');
+    const state = { id: null, mix: null, tracks: [], elapsed: 0, fetchedAt: 0, lastFetch: 0 };
+    const tape = { id: null, mix: null, tracks: [], ended: false };
+    let mode = 'live';
+    let playing = false;
+    let paused = false;
+    let shownTrack = null;
+    const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+    function fmt(sec) {
+      sec = Math.max(0, Math.floor(sec));
+      const h = Math.floor(sec / 3600);
+      const m = Math.floor((sec % 3600) / 60);
+      const ss = String(sec % 60).padStart(2, '0');
+      return h > 0 ? `${h}:${String(m).padStart(2, '0')}:${ss}` : `${String(m).padStart(2, '0')}:${ss}`;
+    }
+
+    function currentElapsed() {
+      return state.elapsed + (Date.now() - state.fetchedAt) / 1000;
+    }
+
+    function coverUrl(id) {
+      return `/api/cover?id=${encodeURIComponent(id)}`;
+    }
+
+    function tapeUrl(id) {
+      return `/tape/${encodeURIComponent(id)}.mp3`;
+    }
+
+    // ---- cassette deck: door, holder and tape (HTML overlay on the photo, see .dk in the CSS) ---------------------------
+    // Two tape layers; one is "on". The door only moves when the user changes the tape (deckChange); render() just keeps the
+    // label of the shown tape current (deckSync) and never touches the outgoing layer while a sequence runs.
+
+    const CAS = {
+      hubs: [[226, 233], [624, 233]], hubSize: 111, lineX: [262, 722], lines: [114, 156], ts: 62, ss: 46, ink: '#1d2a52',
+    };
+    const DOOR_OPEN = 46;
+    const DOOR_MS = 1700;
+    const U = 'var(--u)';
+    const SVG_NS = 'http://www.w3.org/2000/svg';
+    function mk(name, attrs, parent) {
+      const el = document.createElementNS(SVG_NS, name);
+      for (const k in attrs) el.setAttribute(k, attrs[k]);
+      if (parent) parent.appendChild(el);
+      return el;
+    }
+    const deck = { layers: [], cur: 0, seq: null, want: null, timers: [] };
+
+    function playSfx(name) { /* hook: 'eject' | 'close'; route through oneShot(url) when the samples exist */ }
+
+    function deckLabel(mix, id, tracks) {
+      const dur = mix.duration_seconds;
+      const sub = ['Side A'];
+      if (dur > 0) sub.push(`${Math.round(dur / 60)} min`);
+      if (tracks.length) sub.push(`${tracks.length} tracks`);
+      return { title: mix.title || id, sub: sub.join(' · ') };
+    }
+
+    function buildTape() {
+      const svg = mk('svg', { viewBox: '0 0 420 194', class: 'tp' });
+      const g = mk('g', { transform: 'translate(80.7 -3.4) scale(.314)' }, svg);
+      mk('image', { href: '/a/edge-black.webp', x: 0, y: -100, width: 960, height: 100, preserveAspectRatio: 'none' },
+        mk('g', { class: 'edge' }, g));
+      mk('image', { href: '/a/sony.webp', width: 960, height: 614 }, g);
+      CAS.hubs.forEach((o, i) => mk('image', {
+        class: 'hub', href: i ? '/a/sony-hubr.webp' : '/a/sony-hubl.webp', x: o[0], y: o[1], width: CAS.hubSize, height: CAS.hubSize,
+      }, g));
+      const ink = mk('g', { class: 'ink', filter: 'url(#ink)', fill: CAS.ink, 'font-family': 'Caveat,cursive', 'font-weight': 600 }, g);
+      const x = CAS.lineX[0] + 10;
+      const max = CAS.lineX[1] - x - 10;
+      [['t1', CAS.lines[0], CAS.ts, -1.1], ['t2', CAS.lines[1], CAS.ss, -0.6]].forEach(([cls, y, size, rot]) => {
+        const t = mk('text', { class: cls, x, y: y - 5, transform: `rotate(${rot} ${x} ${y})`, 'font-size': size }, ink);
+        t.dataset.size = size;
+        t.dataset.max = max;
+      });
+      $('dk-pop').appendChild(svg);
+      return svg;
+    }
+
+    function fitTape(layer) {
+      layer.querySelectorAll('text').forEach((tx) => {
+        tx.setAttribute('font-size', tx.dataset.size);
+        const len = tx.getComputedTextLength();
+        const max = Number(tx.dataset.max);
+        if (len > max) tx.setAttribute('font-size', (tx.dataset.size * max / len).toFixed(1));
+      });
+    }
+
+    function setTapeLabel(layer, label) {
+      const key = `${label.title}\n${label.sub}`;
+      if (layer.dataset.key === key) return;
+      layer.dataset.key = key;
+      layer.querySelector('.t1').textContent = label.title;
+      layer.querySelector('.t2').textContent = label.sub;
+      fitTape(layer);
+    }
+
+    deck.layers = [buildTape(), buildTape()];
+    document.fonts.load('600 40px Caveat').then(() => deck.layers.forEach(fitTape), () => {});
+
+    function deckApply() {
+      const layer = deck.layers[deck.cur];
+      if (deck.want) setTapeLabel(layer, deck.want);
+      layer.classList.toggle('on', !!deck.want);
+    }
+
+    // Keeps the shown tape's label current (live mix change, wind, ...); null = deck empty. Deferred while the door moves.
+    function deckSync(label) {
+      deck.want = label;
+      if (!deck.seq) deckApply();
+    }
+
+    const dEase = {
+      io: (t) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2),
+      out: (t) => 1 - Math.pow(1 - t, 3),
+      in: (t) => t * t * t,
+    };
+    const lerp = (a, b, t) => a + (b - a) * t;
+    const seg = (ms, a, b, f) => f(Math.min(1, Math.max(0, (ms - a) / (b - a))));
+
+    // door angle (deg) over time
+    function angleAt(ms) {
+      const O = DOOR_OPEN;
+      if (ms < 150) return 0;
+      if (ms < 520) return O * 1.05 * seg(ms, 150, 520, dEase.io);
+      if (ms < 700) return lerp(O * 1.05, O, seg(ms, 520, 700, dEase.io));
+      if (ms < 1280) return O;
+      if (ms < 1580) return O * (1 - seg(ms, 1280, 1580, dEase.in));
+      if (ms < 1630) return 2.2 * seg(ms, 1580, 1630, dEase.out);
+      return 2.2 * (1 - seg(ms, 1630, 1700, dEase.io));
+    }
+    const SLIDE = 210;
+    const lift = (ms) => seg(ms, 600, 880, dEase.in);
+    const drop = (ms) => seg(ms, 960, 1260, dEase.out);
+    const doorKF = (ms) => ({ transform: `rotateX(${-angleAt(ms)}deg)` });
+    const shadowKF = (ms) => {
+      const sn = Math.sin(angleAt(ms) * Math.PI / 180);
+      return { opacity: Math.min(1, sn * 1.25), transform: `scaleY(${0.35 + sn * 0.9})` };
+    };
+    const shadeKF = (ms) => ({ opacity: Math.min(1, Math.sin(angleAt(ms) * Math.PI / 180) * 1.1) });
+    const edgeKF = (ms) => ({ opacity: angleAt(ms) > 0.4 ? 1 : 0 });
+    const glowKF = (ms) => ({ opacity: ms < 100 ? ms / 100 : Math.max(0, 1 - (ms - 100) / 350) });
+    const outKF = (ms) => {
+      const l = lift(ms);
+      return { opacity: l < 0.6 ? 1 : 1 - (l - 0.6) / 0.4, transform: `translateY(calc(${-SLIDE * l} * ${U}))` };
+    };
+    const inKF = (ms) => (ms < 960
+      ? { opacity: 0, transform: `translateY(calc(${-SLIDE} * ${U}))` }
+      : { opacity: Math.min(1, drop(ms) * 2.5), transform: `translateY(calc(${-SLIDE * (1 - drop(ms))} * ${U}))` });
+    const clipAt = (a, up) => ({ clipPath: `inset(calc(${-up * Math.min(1, a / 12)} * ${U}) 0 0 0)`, '--e': Math.min(1, Math.tan(a * Math.PI / 180)) });
+    const clipKF = (ms) => clipAt(angleAt(ms), ms >= 580 && ms <= 1290 ? 300 : 40);
+    const popKF = (ms) => ({ filter: `brightness(${0.82 * (1 - 0.16 * Math.sin(angleAt(ms) * Math.PI / 180))}) contrast(.9)` });
+    const sampled = (fn, n = 80) => Array.from({ length: n + 1 }, (_, i) => ({ offset: i / n, ...fn(i / n * DOOR_MS) }));
+
+    function deckFinish() {
+      const sq = deck.seq;
+      if (!sq) return;
+      deck.seq = null;
+      deck.timers.forEach(clearTimeout);
+      deck.timers = [];
+      deck.layers[1 - deck.cur].classList.add('on');
+      deck.layers[deck.cur].classList.remove('on');
+      deck.cur = 1 - deck.cur;
+      sq.anims.forEach((a) => a.cancel());
+      document.body.classList.remove('busy');
+      deckApply();
+    }
+
+    // User-triggered tape change: EJECT glow, door opens, old tape out, new tape in, door closes. `label` = the new tape.
+    function deckChange(label) {
+      deckFinish();
+      const out = deck.layers[deck.cur];
+      const inc = deck.layers[1 - deck.cur];
+      const outShown = out.classList.contains('on');
+      setTapeLabel(inc, label || { title: '', sub: '' });
+      deck.want = label;
+      const fade = motionOff();
+      const anims = [];
+      if (fade) {
+        const o = { duration: 450, fill: 'both', easing: 'ease' };
+        if (outShown) anims.push(out.animate([{ opacity: 1 }, { opacity: 0 }], o));
+        anims.push(inc.animate([{ opacity: 0 }, { opacity: 1 }], o));
+      } else {
+        const o = { duration: DOOR_MS, fill: 'both', easing: 'linear' };
+        const A = (id, fn) => anims.push($(id).animate(sampled(fn), o));
+        A('dk-door', doorKF);
+        A('dk-shadow', shadowKF);
+        A('dk-edge', edgeKF);
+        A('dk-shade', shadeKF);
+        A('dk-eject', glowKF);
+        if (outShown) anims.push(out.animate(sampled(outKF), o));
+        anims.push(inc.animate(sampled(inKF), o));
+        A('dk-holder', clipKF);
+        A('dk-pop', popKF);
+        deck.timers = [setTimeout(() => playSfx('eject'), 150), setTimeout(() => playSfx('close'), 1500)];
+      }
+      const sq = { anims };
+      deck.seq = sq;
+      document.body.classList.add('busy');
+      Promise.all(anims.map((a) => a.finished)).then(() => { if (deck.seq === sq) deckFinish(); }, () => {});
+    }
+
+    function setStatus(text) {
+      $('status').textContent = text || '';
+    }
+
+    function setDeck(progress) {
+      $('ptr').style.transform = `translate(${(progress * PTR_SPAN).toFixed(2)}px, 0)`;
+    }
+
+    // ---- volume -------------------------------------------------------------
+
+    function loadVolume() {
+      try {
+        const v = parseFloat(localStorage.getItem(VOL_KEY));
+        if (Number.isFinite(v) && v >= 0 && v <= 1) return v;
+      } catch (e) {
+        // storage unavailable
+      }
+      return KNOB.def;
+    }
+
+    let vol = loadVolume();
+    let actx = null;
+    let master = null;
+    let musicGain = null;
+    let analyser = null;
+    let webAudio = null; // null = undecided, false = unavailable
+    let setupPromise = null;
+
+    function applyVolume() {
+      const g = vol * vol;
+      if (master) master.gain.setTargetAtTime(g, actx.currentTime, GAIN_RAMP);
+      else audio.volume = g;
+      const knob = $('knob');
+      const angle = KNOB.minDeg + vol * (KNOB.maxDeg - KNOB.minDeg);
+      $('knob-rot').setAttribute('transform', `rotate(${(angle - KNOB.photoDeg).toFixed(2)} ${KNOB.cx} ${KNOB.cy})`);
+      const pct = Math.round(vol * 100);
+      knob.setAttribute('aria-valuenow', String(pct));
+      knob.setAttribute('aria-valuetext', `${pct}%`);
+    }
+
+    function setVolume(v) {
+      vol = Math.min(1, Math.max(0, v));
+      applyVolume();
+      try {
+        localStorage.setItem(VOL_KEY, String(vol));
+      } catch (e) {
+        // storage unavailable
+      }
+    }
+
+    (function initKnob() {
+      const knob = $('knob');
+      knob.setAttribute('aria-valuemin', '0');
+      knob.setAttribute('aria-valuemax', '100');
+      let drag = null;
+      knob.addEventListener('pointerdown', (ev) => {
+        ev.preventDefault();
+        const ctm = $('box').getScreenCTM();
+        drag = { id: ev.pointerId, y: ev.clientY, v: vol, scale: ctm ? ctm.d : 1 };
+        knob.setPointerCapture(ev.pointerId);
+        knob.focus({ preventScroll: true });
+      });
+      knob.addEventListener('pointermove', (ev) => {
+        if (!drag || ev.pointerId !== drag.id) return;
+        // pointer delta in viewBox units, full range = dragPx CSS px
+        const dy = (ev.clientY - drag.y) / drag.scale;
+        setVolume(drag.v - dy / (KNOB.dragPx / drag.scale));
+      });
+      const rot = $('knob-rot');
+      let over = false;
+      const hot = () => rot.classList.toggle('hot', over || !!drag || document.activeElement === knob);
+      knob.addEventListener('pointerenter', () => { over = true; hot(); });
+      knob.addEventListener('pointerleave', () => { over = false; hot(); });
+      knob.addEventListener('focus', hot);
+      knob.addEventListener('blur', hot);
+      const end = (ev) => {
+        if (drag && ev.pointerId === drag.id) drag = null;
+        if (ev.pointerType !== 'mouse') over = false;
+        knob.blur();
+        hot();
+      };
+      knob.addEventListener('pointerup', end);
+      knob.addEventListener('pointercancel', end);
+      knob.addEventListener('wheel', (ev) => {
+        ev.preventDefault();
+        setVolume(vol + (ev.deltaY < 0 ? KNOB.step : -KNOB.step));
+      }, { passive: false });
+      knob.addEventListener('keydown', (ev) => {
+        let v = null;
+        if (ev.key === 'ArrowUp' || ev.key === 'ArrowRight') v = vol + KNOB.step;
+        else if (ev.key === 'ArrowDown' || ev.key === 'ArrowLeft') v = vol - KNOB.step;
+        else if (ev.key === 'Home') v = 0;
+        else if (ev.key === 'End') v = 1;
+        if (v === null) return;
+        ev.preventDefault();
+        setVolume(v);
+      });
+      applyVolume();
+    })();
+
+    // ---- view: live data or tape copy -----------------------------------------
+
+    const wind = {
+      active: false, dir: 1, target: null, visual: 0, p0: 0, t0: 0, timerDone: false, seekDone: false,
+      timer: 0, giveUp: 0, sound: null, pendingSeek: null, anim: 0,
+    };
+
+    function view() {
+      return mode === 'tape' ? tape : state;
+    }
+
+    function ease(t) {
+      return t * t * (3 - 2 * t);
+    }
+
+    function position() {
+      if (mode === 'tape') return tape.ended ? tape.mix.duration_seconds || audio.currentTime || 0 : audio.currentTime || 0;
+      return currentElapsed();
+    }
+
+    // /api/cover only knows the live mix, so another tape in the deck shows the fallback label.
+    function coverOk(id) {
+      return mode === 'live' || id === state.id;
+    }
+
+    function displayPos() {
+      if (!wind.active) return position();
+      const t = Math.min(1, (Date.now() - wind.t0) / WIND_MS);
+      return wind.p0 + (wind.visual - wind.p0) * ease(t);
+    }
+
+    function updateMediaSession(v, track, mixTitle) {
+      if (!('mediaSession' in navigator) || typeof MediaMetadata === 'undefined') return;
+      const key = `${mode}|${v.id}|${track ? track.start_seconds : ''}`;
+      if (key === shownTrack) return;
+      shownTrack = key;
+      navigator.mediaSession.metadata = new MediaMetadata({
+        title: (track && track.title) || mixTitle,
+        artist: (track && track.artist) || '',
+        album: mixTitle,
+        artwork: coverOk(v.id) ? [{ src: coverUrl(v.id) }] : [],
+      });
+    }
+
+    function render() {
+      const v = view();
+      const mix = v.mix;
+      const badge = $('badge');
+      badge.textContent = mode === 'tape' ? 'TAPE' : '● Live';
+      badge.className = mode === 'tape' ? 'tapeb' : 'live';
+      document.body.classList.toggle('tapemode', mode === 'tape');
+      $('live-btn').hidden = mode !== 'tape';
+      if (v.id === null || !mix) {
+        $('mix').textContent = 'Mixes';
+        $('title').textContent = 'Nothing playing';
+        $('meta').textContent = '';
+        $('bar').style.width = '0';
+        $('t-el').textContent = '';
+        $('t-tot').textContent = '';
+        $('next').hidden = true;
+        deckSync(null);
+        setDeck(0);
+        syncShelf();
+        shownTrack = null;
+        document.title = 'Mixes';
+        return;
+      }
+      const elapsed = displayPos();
+      const dur = mix.duration_seconds;
+      const tracks = v.tracks;
+      let idx = -1;
+      for (let i = 0; i < tracks.length; i++) {
+        if (tracks[i].start_seconds <= elapsed) idx = i;
+      }
+      if (tracks.length && idx < 0) idx = 0;
+      const track = idx >= 0 ? tracks[idx] : null;
+      const mixTitle = mix.title || v.id;
+
+      $('mix').textContent = track ? `${mixTitle} · Track ${idx + 1} of ${tracks.length}` : mixTitle;
+      $('title').textContent = track ? track.title || 'Unknown track' : mixTitle;
+      const parts = [];
+      if (track) {
+        if (track.artist) parts.push(track.artist);
+        if (track.bpm) parts.push(`${Math.round(track.bpm)} BPM`);
+        if (track.camelot) parts.push(track.camelot);
+      }
+      $('meta').textContent = parts.join(' · ');
+
+      const progress = dur > 0 ? Math.min(1, Math.max(0, elapsed / dur)) : 0;
+      $('bar').style.width = `${(progress * 100).toFixed(2)}%`;
+      $('t-el').textContent = fmt(Math.min(elapsed, dur > 0 ? dur : elapsed));
+      $('t-tot').textContent = dur > 0 ? fmt(dur) : '';
+
+      const next = idx >= 0 ? tracks[idx + 1] : null;
+      $('next').hidden = !next;
+      if (next) $('next-b').textContent = [next.artist, next.title].filter(Boolean).join(' · ') || 'Unknown track';
+
+      deckSync(deckLabel(mix, v.id, tracks));
+      setDeck(progress);
+
+      document.title = playing && track && track.title ? `${track.title} · Mixes` : 'Mixes';
+      updateMediaSession(v, track, mixTitle);
+
+      if (mode === 'live' && dur > 0 && elapsed > dur && Date.now() - state.lastFetch > 3000) load();
+      syncShelf();
+    }
+
+    async function load() {
+      state.lastFetch = Date.now();
+      try {
+        const res = await fetch('/api/now', { cache: 'no-store', credentials: 'same-origin' });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const d = await res.json();
+        if (d && d.id !== null && d.id !== undefined && d.mix) {
+          state.id = String(d.id);
+          state.mix = d.mix;
+          state.tracks = (Array.isArray(d.mix.tracks) ? d.mix.tracks : [])
+            .filter((t) => t && typeof t.start_seconds === 'number')
+            .sort((a, b) => a.start_seconds - b.start_seconds);
+          state.elapsed = Number(d.elapsed) || 0;
+          state.fetchedAt = Date.now();
+        } else {
+          state.id = null;
+          state.mix = null;
+          state.tracks = [];
+        }
+      } catch (e) {
+        state.id = null;
+        state.mix = null;
+        state.tracks = [];
+      }
+      render();
+    }
+
+    // ---- Web Audio: master volume, music gain, wind sound, speaker pulse ------------
+    // A media element can be routed only once, and a routed element is silent unless the
+    // context runs, so routing happens only after resume() worked.
+
+    const bins = new Uint8Array(256);
+    let pulse = 0;
+    let raf = 0;
+    let musicOn = true;
+
+    function setupWebAudio() {
+      if (webAudio !== null) return Promise.resolve();
+      if (setupPromise) return setupPromise;
+      setupPromise = (async () => {
+        try {
+          const Ctx = window.AudioContext || window.webkitAudioContext;
+          if (!Ctx) throw new Error('no AudioContext');
+          actx = new Ctx();
+          await Promise.race([actx.resume(), new Promise((r) => setTimeout(r, 1500))]);
+          if (actx.state !== 'running') throw new Error('context not running');
+          master = actx.createGain();
+          master.gain.value = vol * vol;
+          musicGain = actx.createGain();
+          musicGain.gain.value = musicOn ? 1 : 0;
+          const src = actx.createMediaElementSource(audio);
+          if (!reduceMotion) {
+            analyser = actx.createAnalyser();
+            analyser.fftSize = 512;
+            analyser.smoothingTimeConstant = 0.6;
+            src.connect(analyser);
+            analyser.connect(musicGain);
+          } else {
+            src.connect(musicGain);
+          }
+          musicGain.connect(master);
+          master.connect(actx.destination);
+          audio.volume = 1;
+          audio.muted = false;
+          actx.addEventListener('statechange', () => {
+            if (playing && actx.state !== 'running') actx.resume().catch(() => {});
+          });
+          webAudio = true;
+          loadSample();
+        } catch (e) {
+          webAudio = false;
+          audio.volume = vol * vol;
+          if (actx) actx.close().catch(() => {});
+          actx = null;
+          master = null;
+          musicGain = null;
+          analyser = null;
+        }
+      })();
+      return setupPromise;
+    }
+
+    function setMusic(on) {
+      musicOn = on;
+      if (musicGain) musicGain.gain.setTargetAtTime(on ? 1 : 0, actx.currentTime, on ? 0.06 : 0.03);
+      else audio.muted = !on;
+    }
+
+    let noiseBuf = null;
+
+    // Recorded wind (key clunk, then the whirr). Loops the whirr while the tape is still loading.
+    const SAMPLE = { url: '/a/wind.mp3', loopStart: 0.6, clunkEnd: 0.45, endClunkGain: 0.6 };
+    let sampleBuf = null;
+    let sampleLoading = false;
+    let sampleReady = Promise.resolve();
+    // Fetched at page load; decoded as soon as the AudioContext exists.
+    const sampleBytes = fetch(SAMPLE.url, { credentials: 'same-origin' })
+      .then((r) => (r.ok ? r.arrayBuffer() : null))
+      .catch(() => null);
+
+    function loadSample() {
+      if (sampleBuf || sampleLoading || !actx) return sampleReady;
+      sampleLoading = true;
+      sampleReady = sampleBytes
+        .then((b) => (b ? new Promise((res, rej) => actx.decodeAudioData(b.slice(0), res, rej)) : null))
+        .then((buf) => { if (buf) sampleBuf = buf; })
+        .catch(() => {});
+      return sampleReady;
+    }
+
+    function playSample() {
+      const t0 = actx.currentTime;
+      const out = actx.createGain();
+      out.gain.value = WIND.level;
+      out.connect(master);
+      const src = actx.createBufferSource();
+      src.buffer = sampleBuf;
+      src.loop = true;
+      src.loopStart = SAMPLE.loopStart;
+      src.loopEnd = sampleBuf.duration - 0.2;
+      src.connect(out);
+      src.start(t0);
+      return {
+        stop(withClunk) {
+          const t = actx.currentTime;
+          out.gain.cancelScheduledValues(t);
+          out.gain.setTargetAtTime(0, t, WIND.fadeS / 3);
+          src.stop(t + WIND.killS);
+          if (withClunk) {
+            const c = actx.createBufferSource();
+            const g = actx.createGain();
+            c.buffer = sampleBuf;
+            g.gain.value = WIND.level * SAMPLE.endClunkGain;
+            c.connect(g);
+            g.connect(master);
+            c.start(t + WIND.endClunkDelayS, 0, SAMPLE.clunkEnd);
+          }
+        },
+      };
+    }
+
+    function synthClunk(t, dest) {
+      const o = actx.createOscillator();
+      const g = actx.createGain();
+      o.frequency.setValueAtTime(WIND.clunkHz[0], t);
+      o.frequency.exponentialRampToValueAtTime(WIND.clunkHz[1], t + WIND.clunkS);
+      g.gain.setValueAtTime(WIND.clunkGain, t);
+      g.gain.exponentialRampToValueAtTime(0.001, t + WIND.clunkS);
+      o.connect(g);
+      g.connect(dest);
+      o.start(t);
+      o.stop(t + WIND.clunkS + 0.02);
+      const n = actx.createBufferSource();
+      n.buffer = noiseBuffer();
+      const hp = actx.createBiquadFilter();
+      hp.type = 'highpass';
+      hp.frequency.value = 2500;
+      const ng = actx.createGain();
+      ng.gain.setValueAtTime(WIND.clickGain, t);
+      ng.gain.exponentialRampToValueAtTime(0.001, t + WIND.clickS);
+      n.connect(hp);
+      hp.connect(ng);
+      ng.connect(dest);
+      n.start(t);
+      n.stop(t + WIND.clickS + 0.02);
+    }
+
+    function noiseBuffer() {
+      if (!noiseBuf) {
+        noiseBuf = actx.createBuffer(1, actx.sampleRate * 2, actx.sampleRate);
+        const d = noiseBuf.getChannelData(0);
+        for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+      }
+      return noiseBuf;
+    }
+
+    // The key clunk: the first part of the wind sample. Silent while the sample is not ready.
+    function playClunk() {
+      if (!actx || !master || !sampleBuf) return;
+      const out = actx.createGain();
+      out.gain.value = WIND.level;
+      out.connect(master);
+      const c = actx.createBufferSource();
+      c.buffer = sampleBuf;
+      c.connect(out);
+      c.start(actx.currentTime, 0, SAMPLE.clunkEnd);
+    }
+
+    function keyClick() {
+      if (webAudio === false) return;
+      setupWebAudio().then(() => loadSample()).then(() => playClunk());
+    }
+
+    // Recorded one-shots: PLAY / PAUSE / STOP key press, autostop at the tape end.
+    function oneShot(url) {
+      let buf = null;
+      let ready = null;
+      const bytes = fetch(url, { credentials: 'same-origin' })
+        .then((r) => (r.ok ? r.arrayBuffer() : null))
+        .catch(() => null);
+      const load = () => {
+        if (!ready) {
+          ready = bytes
+            .then((b) => (b ? new Promise((res, rej) => actx.decodeAudioData(b.slice(0), res, rej)) : null))
+            .then((d) => { buf = d; })
+            .catch(() => {});
+        }
+        return ready;
+      };
+      return () => {
+        if (webAudio === false) return;
+        setupWebAudio().then(() => { if (actx) return load(); }).then(() => {
+          if (!actx || !master || !buf) return;
+          const g = actx.createGain();
+          g.gain.value = WIND.level;
+          g.connect(master);
+          const c = actx.createBufferSource();
+          c.buffer = buf;
+          c.connect(g);
+          c.start(actx.currentTime);
+        });
+      };
+    }
+    const keyPress = oneShot('/a/press.mp3');
+    const autostopSound = oneShot('/a/autostop.mp3');
+
+    function playWind(dir) {
+      if (!actx || !master) return null;
+      if (sampleBuf) return playSample();
+      const k = dir > 0 ? 'ff' : 'rew';
+      const t0 = actx.currentTime;
+      const out = actx.createGain();
+      out.gain.value = WIND.level;
+      out.connect(master);
+
+      synthClunk(t0, out);
+
+      const noise = actx.createBufferSource();
+      noise.buffer = noiseBuffer();
+      noise.loop = true;
+      const bp = actx.createBiquadFilter();
+      bp.type = 'bandpass';
+      bp.Q.value = WIND.noiseQ;
+      bp.frequency.setValueAtTime(WIND.noiseHz[0], t0);
+      bp.frequency.linearRampToValueAtTime(WIND.noiseHz[1], t0 + WIND.whineRampS[k]);
+      const ng = actx.createGain();
+      ng.gain.setValueAtTime(0, t0);
+      ng.gain.linearRampToValueAtTime(WIND.noiseGain, t0 + WIND.noiseRampS + 0.05);
+      noise.connect(bp);
+      bp.connect(ng);
+      ng.connect(out);
+      noise.start(t0);
+
+      const whine = actx.createOscillator();
+      whine.type = 'triangle';
+      whine.frequency.setValueAtTime(WIND.whineHz[k][0], t0);
+      whine.frequency.exponentialRampToValueAtTime(WIND.whineHz[k][1], t0 + WIND.whineRampS[k]);
+      const lp = actx.createBiquadFilter();
+      lp.type = 'lowpass';
+      lp.frequency.value = WIND.whineLowpass;
+      const wg = actx.createGain();
+      wg.gain.setValueAtTime(0, t0);
+      wg.gain.linearRampToValueAtTime(WIND.whineGain, t0 + 0.2);
+      whine.connect(lp);
+      lp.connect(wg);
+      wg.connect(out);
+      whine.start(t0);
+
+      return {
+        stop(withClunk) {
+          const t = actx.currentTime;
+          ng.gain.cancelScheduledValues(t);
+          ng.gain.setTargetAtTime(0, t, WIND.fadeS / 3);
+          wg.gain.cancelScheduledValues(t);
+          wg.gain.setTargetAtTime(0, t, WIND.fadeS / 3);
+          if (withClunk) synthClunk(t + WIND.endClunkDelayS, out);
+          const end = t + WIND.endClunkDelayS + WIND.killS;
+          noise.stop(end);
+          whine.stop(end);
+        },
+      };
+    }
+
+    function setSpeakerScale(s) {
+      SPEAKERS.forEach(([cx, cy], i) => {
+        $(i ? 'z-r' : 'z-l').setAttribute('transform', `translate(${cx} ${cy}) scale(${s}) translate(${-cx} ${-cy})`);
+      });
+    }
+
+    function frame() {
+      raf = 0;
+      if (!playing || !analyser) return;
+      analyser.getByteFrequencyData(bins);
+      // bins 1..5 at ~94 Hz each: bass
+      const bass = (bins[1] + bins[2] + bins[3] + bins[4] + bins[5]) / 5;
+      const target = Math.min(1, Math.max(0, (bass - 120) / 110));
+      pulse += (target - pulse) * (target > pulse ? 0.6 : 0.15);
+      setSpeakerScale((1 + 0.012 * pulse).toFixed(5));
+      raf = requestAnimationFrame(frame);
+    }
+
+    function syncKeys() {
+      document.body.classList.toggle('playing', playing && !paused);
+      $('pressed').style.display = playing ? '' : 'none';
+      $('pressed-pause').style.display = playing && paused ? '' : 'none';
+      $('key-play').setAttribute('aria-pressed', String(playing));
+      $('key-pause').setAttribute('aria-pressed', String(playing && paused));
+      if ('mediaSession' in navigator) navigator.mediaSession.playbackState = playing && !paused ? 'playing' : 'paused';
+    }
+
+    function setPlaying(on) {
+      playing = on;
+      if (!on) paused = false;
+      syncKeys();
+      if (on && analyser && !raf) raf = requestAnimationFrame(frame);
+      if (!on) {
+        pulse = 0;
+        setSpeakerScale(1);
+      }
+      render();
+    }
+
+    // ---- live stream recovery ----------------------------------------------------
+
+    const rec = { timer: 0, attempt: 0, active: false, lastTime: 0, lastAdvance: Date.now() };
+
+    function clearRecovery() {
+      clearTimeout(rec.timer);
+      rec.timer = 0;
+      rec.attempt = 0;
+      rec.active = false;
+      rec.lastAdvance = Date.now();
+    }
+
+    function playLive() {
+      audio.src = '/mixes.mp3';
+      rec.lastTime = 0;
+      rec.lastAdvance = Date.now();
+      audio.play().catch((e) => {
+        if (e && e.name === 'AbortError') return;
+        if (playing && mode === 'live') scheduleReconnect();
+      });
+    }
+
+    function scheduleReconnect() {
+      if (!playing || paused || mode !== 'live' || rec.timer) return;
+      const delay = BACKOFF_S[Math.min(rec.attempt, BACKOFF_S.length - 1)];
+      rec.attempt++;
+      rec.active = true;
+      setStatus('Reconnecting...');
+      rec.timer = setTimeout(() => {
+        rec.timer = 0;
+        if (!playing || mode !== 'live') return;
+        playLive();
+      }, delay * 1000);
+    }
+
+    setInterval(() => {
+      if (!playing || mode !== 'live' || wind.active || audio.paused || rec.timer) return;
+      const t = audio.currentTime;
+      if (t !== rec.lastTime) {
+        rec.lastTime = t;
+        rec.lastAdvance = Date.now();
+      } else if (Date.now() - rec.lastAdvance > WATCHDOG_MS) {
+        scheduleReconnect();
+      }
+    }, 1000);
+
+    audio.addEventListener('playing', () => {
+      rec.lastAdvance = Date.now();
+      if (rec.active) {
+        setStatus('');
+        clearRecovery();
+      }
+    });
+
+    // ---- mode switches ---------------------------------------------------------------
+
+    function goLive() {
+      mode = 'live';
+      wind.pendingSeek = null;
+      clearRecovery();
+      setMusic(true);
+      playLive();
+      render();
+    }
+
+    function endWind(withClunk) {
+      clearTimeout(wind.timer);
+      clearTimeout(wind.giveUp);
+      clearInterval(wind.anim);
+      if (wind.sound) wind.sound.stop(withClunk);
+      wind.sound = null;
+      wind.active = false;
+      document.body.classList.remove('winding', 'rew');
+      $('pressed-rew').style.display = 'none';
+      $('pressed-ff').style.display = 'none';
+    }
+
+    function tapeFail() {
+      endWind(false);
+      setStatus('Tape not ready yet');
+      if (playing) goLive();
+      else {
+        mode = 'live';
+        setMusic(true);
+        render();
+      }
+    }
+
+    // The tape ran to its end (or was wound there): stop, stay in TAPE mode with the deck at the end.
+    function tapeEnd() {
+      endWind(false);
+      tape.ended = true;
+      setMusic(true);
+      audio.pause();
+      setStatus('Tape ended.');
+      setPlaying(false);
+      autostopSound();
+    }
+
+    function finishWind() {
+      const toEnd = wind.target === null;
+      endWind(!toEnd);
+      if (toEnd) {
+        tapeEnd();
+      } else {
+        setMusic(true);
+        render();
+      }
+    }
+
+    // The tape keeps running (muted) while winding, so it is put back on the target once before the music returns.
+    function tryFinish() {
+      if (!wind.active || !wind.timerDone || !wind.seekDone) return;
+      if (wind.target !== null && !wind.settled && Math.abs(audio.currentTime - wind.target) > 0.4) {
+        wind.settled = true;
+        wind.seekDone = false;
+        audio.currentTime = wind.target;
+        return;
+      }
+      finishWind();
+    }
+
+    function seekTo(target) {
+      if (audio.readyState === 0) {
+        wind.pendingSeek = target;
+        return;
+      }
+      if (Math.abs(audio.currentTime - target) < 0.05) {
+        wind.seekDone = true;
+        return;
+      }
+      wind.seekDone = false;
+      audio.currentTime = target;
+    }
+
+    audio.addEventListener('loadedmetadata', () => {
+      if (mode === 'tape' && wind.pendingSeek !== null) {
+        const t = wind.pendingSeek;
+        wind.pendingSeek = null;
+        seekTo(t);
+        tryFinish();
+      }
+    });
+
+    audio.addEventListener('seeked', () => {
+      if (wind.active && !wind.seekDone) {
+        wind.seekDone = true;
+        tryFinish();
+      }
+    });
+
+    // Loads a tape into the deck and plays it from startPos (0 = no seek needed).
+    function enterTape(id, mix, tracks, startPos) {
+      tape.id = id;
+      tape.mix = mix;
+      tape.tracks = tracks;
+      tape.ended = false;
+      mode = 'tape';
+      clearRecovery();
+      wind.pendingSeek = startPos > 0 ? startPos : null;
+      audio.src = tapeUrl(id);
+      audio.play().catch((e) => {
+        if (e && e.name === 'AbortError') return;
+        tapeFail();
+      });
+    }
+
+    function windPress(dir) {
+      const v = view();
+      if (v.id === null || !v.mix || !v.tracks.length) return;
+      const pos = wind.active ? wind.visual : position();
+      let target;
+      if (dir > 0) {
+        const n = v.tracks.find((t) => t.start_seconds > pos + 1);
+        target = n ? n.start_seconds : null;
+      } else {
+        let idx = -1;
+        v.tracks.forEach((t, i) => {
+          if (t.start_seconds <= pos + 0.5) idx = i;
+        });
+        if (mode === 'tape' && tape.ended) target = v.tracks[v.tracks.length - 1].start_seconds;
+        else target = idx > 0 ? v.tracks[idx - 1].start_seconds : 0;
+      }
+      if (target === null && mode === 'live') return;
+
+      if (!playing) begin();
+      else if (paused) {
+        paused = false;
+        syncKeys();
+      }
+      const from = displayPos();
+      wind.dir = dir;
+      wind.target = target;
+      wind.visual = target === null ? v.mix.duration_seconds || pos : target;
+      wind.p0 = from;
+      wind.t0 = Date.now();
+      wind.timerDone = false;
+      wind.seekDone = target === null;
+      wind.settled = false;
+      wind.active = true;
+
+      if (!wind.sound) {
+        setMusic(false);
+        wind.sound = playWind(dir);
+        if (!wind.sound) {
+          setupWebAudio().then(() => {
+            if (wind.active && !wind.sound) {
+              setMusic(false);
+              wind.sound = playWind(wind.dir);
+            }
+          });
+        }
+      }
+      clearTimeout(wind.timer);
+      wind.timer = setTimeout(() => {
+        wind.timerDone = true;
+        tryFinish();
+      }, WIND_MS);
+      clearTimeout(wind.giveUp);
+      wind.giveUp = setTimeout(tapeFail, WIND_MAX_MS);
+      clearInterval(wind.anim);
+      wind.anim = setInterval(render, 60);
+      document.body.classList.add('winding');
+      document.body.classList.toggle('rew', dir < 0);
+      $('pressed-rew').style.display = dir < 0 ? '' : 'none';
+      $('pressed-ff').style.display = dir > 0 ? '' : 'none';
+
+      if (target !== null) {
+        if (mode !== 'tape' || tape.id !== v.id || !audio.getAttribute('src') || audio.getAttribute('src') === '/mixes.mp3') {
+          enterTape(v.id, v.mix, v.tracks, target);
+        } else {
+          tape.ended = false;
+          seekTo(target);
+          if (audio.paused) audio.play().catch(() => {});
+        }
+      }
+      setStatus('');
+      render();
+    }
+
+    // play() runs synchronously inside the click (iOS needs the gesture); Web Audio is set up
+    // afterwards and only routes the element once its context is running.
+    function begin() {
+      setStatus('');
+      setPlaying(true);
+      if (actx && actx.state !== 'running') actx.resume().catch(() => {});
+      setupWebAudio().then(() => {
+        if (playing && analyser && !raf) raf = requestAnimationFrame(frame);
+      });
+    }
+
+    // PLAY never leaves TAPE: it resumes a stopped or paused tape; only the "Back to live" link goes live.
+    function start() {
+      if (playing && wind.active) return;
+      if (playing && paused) {
+        resumeFromPause();
+        return;
+      }
+      if (mode === 'tape') {
+        const src = audio.getAttribute('src');
+        if (!playing && !tape.ended && src && src !== '/mixes.mp3') {
+          begin();
+          audio.play().catch((e) => {
+            if (e && e.name === 'AbortError') return;
+            tapeFail();
+          });
+        }
+        return;
+      }
+      if (playing) return;
+      begin();
+      clearRecovery();
+      playLive();
+    }
+
+    function backToLive() {
+      if (mode === 'tape') deckChange(state.mix ? deckLabel(state.mix, state.id, state.tracks) : null);
+      endWind(false);
+      if (playing) {
+        paused = false;
+        setStatus('');
+        goLive();
+        syncKeys();
+      } else {
+        mode = 'live';
+        begin();
+        clearRecovery();
+        playLive();
+      }
+    }
+
+    function resumeFromPause() {
+      paused = false;
+      if (mode === 'live') {
+        clearRecovery();
+        playLive();
+      } else {
+        audio.play().catch((e) => {
+          if (e && e.name === 'AbortError') return;
+          tapeFail();
+        });
+      }
+      syncKeys();
+      render();
+    }
+
+    function pauseKey() {
+      if (!playing || wind.active) return;
+      if (paused) {
+        resumeFromPause();
+        return;
+      }
+      paused = true;
+      clearRecovery();
+      audio.pause();
+      syncKeys();
+      render();
+    }
+
+    // STOP stops where it is; a tape stays in the deck.
+    function stop() {
+      endWind(false);
+      clearRecovery();
+      setMusic(true);
+      audio.pause();
+      if (mode !== 'tape') {
+        wind.pendingSeek = null;
+        audio.removeAttribute('src');
+        audio.load();
+      }
+      setPlaying(false);
+    }
+
+    function toggle() {
+      if (playing) stop(); else start();
+    }
+
+    audio.addEventListener('error', () => {
+      if (!playing) return;
+      if (mode === 'tape') {
+        tapeFail();
+        return;
+      }
+      scheduleReconnect();
+    });
+
+    audio.addEventListener('ended', () => {
+      if (!playing) return;
+      if (mode === 'tape') {
+        tapeEnd();
+      } else {
+        scheduleReconnect();
+      }
+    });
+
+    function control(id, fn) {
+      const el = $(id);
+      el.addEventListener('click', fn);
+      el.addEventListener('keydown', (ev) => {
+        if (ev.key === 'Enter' || ev.key === ' ') {
+          ev.preventDefault();
+          fn();
+        }
+      });
+    }
+    control('key-play', () => { keyPress(); start(); });
+    control('key-pause', () => { keyPress(); pauseKey(); });
+    control('key-stop', () => { keyPress(); stop(); });
+    $('live-btn').addEventListener('click', backToLive);
+
+    // FUNCTION switch: TAPE -> back to live; RADIO -> the live mix continues as a tape from the same spot.
+    function fnSwitch() {
+      keyPress();
+      if (mode === 'tape') {
+        backToLive();
+        return;
+      }
+      const v = view();
+      if (v.id === null || !v.mix) return;
+      const pos = position();
+      endWind(false);
+      setMusic(true);
+      if (!playing) begin();
+      else if (paused) {
+        paused = false;
+        syncKeys();
+      }
+      enterTape(v.id, v.mix, v.tracks, pos);
+      setStatus('');
+      render();
+    }
+    control('key-fn', fnSwitch);
+    control('key-rew', () => windPress(-1));
+    control('key-ff', () => windPress(1));
+    $('hit-all').addEventListener('click', toggle);
+
+    if ('mediaSession' in navigator) {
+      const handlers = { play: start, pause: () => { if (!paused) pauseKey(); }, stop, nexttrack: () => windPress(1), previoustrack: () => windPress(-1) };
+      for (const k in handlers) {
+        try {
+          navigator.mediaSession.setActionHandler(k, handlers[k]);
+        } catch (e) {
+          // action not supported
+        }
+      }
+    }
+
+    // ---- hover / focus glow on the photo keys, like the volume knob --------------------
+
+    ['play', 'rew', 'ff', 'stop', 'pause', 'fn'].forEach((n) => {
+      const el = $(`key-${n}`);
+      const glow = $(`kh-${n}`);
+      let over = false;
+      const hot = () => glow.classList.toggle('hot', over || el.matches(':focus-visible'));
+      el.addEventListener('pointerenter', (ev) => { over = ev.pointerType === 'mouse'; hot(); });
+      el.addEventListener('pointerleave', () => { over = false; hot(); });
+      el.addEventListener('focus', hot);
+      el.addEventListener('blur', hot);
+    });
+
+    // ---- tape carousel ------------------------------------------------------------------
+    // One carousel photo (all slots empty) with one spine image per mix over it, newest first, PER_PAGE per rotation
+    // position. Turning swaps the tape layer; the photo stays put.
+
+    const SVGNS = 'http://www.w3.org/2000/svg';
+    const SHELF = {"size":[1052,834],"spine":[72,531],"poly":[[1048.5,212.5],[1045.5,215.5],[1044.5,259.5],[1040.5,610.5],[1040.5,672.5],
+    [1044.5,679.5],[1044.5,683.5],[1039.5,689.5],[1035.5,713.5],[1036.5,718.5],[1030.5,735.5],[954.5,749.5],[948.5,747.5],
+    [943.5,751.5],[873.5,763.5],[863.5,762.5],[855.5,766.5],[842.5,767.5],[820.5,779.5],[791.5,789.5],[784.5,789.5],
+    [780.5,793.5],[769.5,797.5],[749.5,799.5],[722.5,806.5],[646.5,818.5],[594.5,823.5],[589.5,825.5],[464.5,830.5],
+    [396.5,828.5],[368.5,823.5],[349.5,822.5],[288.5,806.5],[249.5,789.5],[247.5,790.5],[237.5,786.5],[220.5,777.5],
+    [212.5,763.5],[207.5,758.5],[111.5,719.5],[88.5,706.5],[25.5,679.5],[22.5,674.5],[20.5,574.5],[9.5,194.5],[7.5,158.5],
+    [3.5,152.5],[5.5,128.5],[9.5,109.5],[77.5,98.5],[208.5,82.5],[400.5,65.5],[405.5,64.5],[410.5,59.5],[405.5,53.5],
+    [397.5,48.5],[400.5,18.5],[408.5,13.5],[436.5,7.5],[473.5,4.5],[538.5,3.5],[575.5,5.5],[610.5,10.5],[628.5,16.5],
+    [631.5,20.5],[631.5,50.5],[636.5,55.5],[666.5,58.5],[731.5,69.5],[832.5,92.5],[973.5,131.5],[1040.5,155.5]],
+    "quads":[[[406.7,244.8],[478.8,242.0],[478.8,775.2],[406.7,781.5]],[[481.0,241.9],[553.0,239.0],[553.0,766.3],
+    [481.0,775.0]],[[555.2,238.9],[627.3,236.0],[627.3,757.2],[555.2,766.0]],[[629.4,235.9],[701.5,233.0],[701.5,756.2],
+    [629.4,757.2]],[[703.7,233.0],[775.8,230.1],[775.8,755.2],[703.7,756.2]],[[778.0,230.0],[850.0,227.1],[850.0,754.2],
+    [778.0,755.2]]],"leftQuads":[[[26.7,163.4],[63.0,165.1],[63.0,643.7],[26.7,629.9]],[[64.1,165.1],[100.5,173.8],
+    [100.5,658.0],[64.1,644.1]],[[101.6,174.1],[138.0,184.7],[138.0,672.2],[101.6,658.4]],[[139.1,185.1],[175.5,196.3],
+    [175.5,686.5],[139.1,672.6]],[[176.6,196.7],[213.0,209.7],[213.0,700.7],[176.6,686.9]],[[214.1,210.2],[250.5,223.6],
+    [250.5,715.0],[214.1,701.1]]],"label":{"white":{"x":6.5,"y":32.8,"w":51.4,"h":481.7},
+    "cream":{"x":6.5,"y":32.8,"w":51.4,"h":481.7},"pink":{"x":6.5,"y":32.8,"w":51.4,"h":481.7}},
+    "light":[1.1,1.052,0.969,0.952,1.0,1.1]};
+    const PER_PAGE = SHELF.quads.length;
+    const TEMPLATES = ['white', 'pink', 'cream'];
+    const CASES = ['', '', '_smoky', '_black'];
+    const INKS = ['#1b2a5e', '#2a2220', '#7a2222'];
+    const TURN_MS = 350;
+    const TURN_DX = 60;
+    const shelf = { mixes: [], page: 0, ver: 0, key: '', ready: false, anim: [] };
+
+    function svgEl(name, attrs, parent) {
+      const el = document.createElementNS(SVGNS, name);
+      for (const k in attrs) el.setAttribute(k, attrs[k]);
+      if (parent) parent.appendChild(el);
+      return el;
+    }
+
+    function hashId(id) {
+      let h = 2166136261;
+      for (let i = 0; i < id.length; i++) h = Math.imul(h ^ id.charCodeAt(i), 16777619);
+      return h >>> 0;
+    }
+
+    function tracksOf(mix) {
+      return (Array.isArray(mix.tracks) ? mix.tracks : [])
+        .filter((t) => t && typeof t.start_seconds === 'number')
+        .sort((a, b) => a.start_seconds - b.start_seconds);
+    }
+
+    function dateOf(mix) {
+      const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(mix.date || ''));
+      return m ? `${m[3]}.${m[2]}.${m[1]}` : '';
+    }
+
+    function minutesOf(mix) {
+      return mix.duration_seconds > 0 ? `${Math.round(mix.duration_seconds / 60)} min` : '';
+    }
+
+    function deckId() {
+      return mode === 'tape' ? tape.id : state.id;
+    }
+
+    // Same title twice among the shown mixes: add the folder's "(n)" suffix, else fall back to the folder name.
+    function labelsFor(items) {
+      const base = items.map((m) => (m.mix.title ? String(m.mix.title) : m.id));
+      const count = (arr) => arr.reduce((o, t) => ((o[t] = (o[t] || 0) + 1), o), {});
+      let c = count(base);
+      const withSuffix = base.map((t, i) => {
+        if (c[t] < 2) return t;
+        const m = /\((\d+)\)\s*$/.exec(items[i].id);
+        return m ? `${t} (${m[1]})` : t;
+      });
+      c = count(withSuffix);
+      return withSuffix.map((t, i) => (c[t] > 1 ? items[i].id : t));
+    }
+
+    function fitText(el, maxW, maxSize) {
+      el.setAttribute('font-size', String(maxSize));
+      const w = el.getComputedTextLength();
+      if (w > maxW) el.setAttribute('font-size', (maxSize * maxW / w).toFixed(2));
+    }
+
+    function fitAll() {
+      document.querySelectorAll('#tapes text').forEach((t) => fitText(t, Number(t.dataset.w), Number(t.dataset.max)));
+    }
+
+    // Maps the upright spine image (SHELF.spine) onto a slot quad (TL, TR, BR, BL).
+    function quadMatrix(q) {
+      const [W, H] = SHELF.spine;
+      const a = (q[1][0] - q[0][0]) / W;
+      const b = (q[1][1] - q[0][1]) / W;
+      const c = (q[3][0] - q[0][0]) / H;
+      const d = (q[3][1] - q[0][1]) / H;
+      return `matrix(${a} ${b} ${c} ${d} ${q[0][0]} ${q[0][1]})`;
+    }
+
+    function initShelf() {
+      const svg = $('rack');
+      const [w, h] = SHELF.size;
+      svg.setAttribute('viewBox', `-30 -8 ${w + 60} ${h + 40}`);
+      const defs = svgEl('defs', {}, svg);
+      const cp = svgEl('clipPath', { id: 'rack-clip' }, defs);
+      svgEl('polygon', { points: SHELF.poly.map((p) => p.join(',')).join(' ') }, cp);
+      const [SW, SH] = SHELF.spine;
+      TEMPLATES.forEach((t) => {
+        const l = SHELF.label[t];
+        const c = svgEl('clipPath', { id: `lc-${t}` }, defs);
+        svgEl('rect', { x: l.x, y: l.y, width: l.w, height: l.h }, c);
+      });
+      // the tapes only exist inside the open face: clip the moving layer to it
+      const xs = SHELF.quads.flatMap((q) => q.map((p) => p[0]));
+      const ys = SHELF.quads.flatMap((q) => q.map((p) => p[1]));
+      const fc = svgEl('clipPath', { id: 'face-clip' }, defs);
+      svgEl('rect', {
+        x: Math.min(...xs) - 2, y: Math.min(...ys) - 3, width: Math.max(...xs) - Math.min(...xs) + 4, height: Math.max(...ys) - Math.min(...ys) + 7,
+      }, fc);
+      const sh = svgEl('filter', { id: 'rack-shadow', x: '-15%', y: '-5%', width: '130%', height: '120%' }, defs);
+      svgEl('feDropShadow', { dx: 0, dy: 12, stdDeviation: 14, 'flood-color': '#000', 'flood-opacity': '.7' }, sh);
+      const ink = svgEl('filter', { id: 'ink', x: '-5%', y: '-5%', width: '110%', height: '110%' }, defs);
+      svgEl('feGaussianBlur', { stdDeviation: '.25' }, ink);
+      const body = svgEl('g', { filter: 'url(#rack-shadow)' }, svg);
+      const wrap = svgEl('g', { 'clip-path': 'url(#rack-clip)' }, body);
+      svgEl('image', { href: '/a/carousel.jpg', width: w, height: h }, wrap);
+      svgEl('g', { id: 'deco', 'aria-hidden': 'true' }, svg);
+      const face = svgEl('g', { 'clip-path': 'url(#face-clip)' }, svg);
+      svgEl('g', { id: 'tapes' }, face);
+      svg.dataset.sw = String(SW);
+      svg.dataset.sh = String(SH);
+      document.fonts.load('600 24px Caveat').then(fitAll, () => {});
+      document.fonts.addEventListener('loadingdone', fitAll);
+    }
+
+    function pagesCount() {
+      return Math.max(1, Math.ceil(shelf.mixes.length / PER_PAGE));
+    }
+
+    function motionOff() {
+      return window.matchMedia('(prefers-reduced-motion: reduce)').matches || typeof Element.prototype.animate !== 'function';
+    }
+
+    // Builds the tape layer (a <g class="layer">) for the current rotation position.
+    function buildLayer(parent) {
+      const g = svgEl('g', { class: 'layer' }, parent);
+      const items = shelf.mixes.slice(shelf.page * PER_PAGE, (shelf.page + 1) * PER_PAGE);
+      const labels = labelsFor(items);
+      const [SW, SH] = SHELF.spine;
+      const inDeck = deckId();
+      items.forEach((m, i) => {
+        if (m.id === inDeck) {
+          // the deck tape's slot: real gap photo; the neighbour's case side shows only when a tape stands to the right
+          const next = items[i + 1];
+          const gap = svgEl('g', { transform: quadMatrix(SHELF.quads[i]), 'aria-hidden': 'true' }, g);
+          svgEl('image', { href: next && next.id !== inDeck ? '/a/slot_gap.jpg' : '/a/slot_gap_plain.jpg', width: SW, height: SH }, gap);
+          return;
+        }
+        const hsh = hashId(m.id);
+        const tpl = TEMPLATES[hsh % TEMPLATES.length];
+        const caseKind = CASES[(hsh >>> 20) % CASES.length];
+        const lab = SHELF.label[tpl];
+        const date = dateOf(m.mix);
+        const meta = [date, minutesOf(m.mix)].filter(Boolean).join(' · ');
+        // deterministic per-tape variation: pushed in 0-5 px, scale .99-1, lean +-0.5 deg, brightness +-4%, lighting falloff
+        const dy = (hsh >>> 16) % 6;
+        const sc = 1 - ((hsh >>> 24) % 11) / 1000;
+        const lean = (((hsh >>> 6) % 101) - 50) / 100;
+        const bright = (SHELF.light[i] || 1) * (1 + (((hsh >>> 2) % 81) - 40) / 1000);
+        const el = svgEl('g', {
+          class: 'tape', role: 'button', tabindex: '0', 'data-id': m.id, 'data-slot': String(i),
+          'aria-label': date ? `${labels[i]}, ${date}` : labels[i],
+          transform: `${quadMatrix(SHELF.quads[i])} translate(0 ${dy}) translate(${SW / 2} ${SH}) rotate(${lean}) scale(${sc}) translate(${-SW / 2} ${-SH})`,
+        }, g);
+        svgEl('title', {}, el).textContent = meta ? `${labels[i]} · ${meta}` : labels[i];
+        const inner = svgEl('g', {}, el);
+        const img = svgEl('image', { href: `/a/spine_${tpl}${caseKind}.jpg`, width: SW, height: SH }, inner);
+        img.style.filter = `brightness(${bright.toFixed(3)})`;
+        const txt = svgEl('g', { 'clip-path': `url(#lc-${tpl})` }, inner);
+        const ink = INKS[(hsh >>> 4) % INKS.length];
+        const rot = (((hsh >>> 12) % 21) - 10) / 40;
+        // title only, running down the spine (rotated 90 degrees clockwise), as large as the writable width allows
+        const ig = svgEl('g', { transform: `translate(${lab.x} ${lab.y + 2}) rotate(${90 + rot})`, opacity: '.92', filter: 'url(#ink)', fill: ink }, txt);
+        ig.style.mixBlendMode = 'multiply';
+        const t1 = svgEl('text', { x: 0, y: -Math.round(lab.w * 0.53), 'data-w': lab.h - 8, 'data-max': 31 }, ig);
+        t1.textContent = labels[i];
+        svgEl('rect', { width: SW, height: SH, fill: 'transparent' }, inner);
+        el.addEventListener('pointerenter', (ev) => el.classList.toggle('hot', ev.pointerType === 'mouse'));
+        el.addEventListener('pointerleave', () => el.classList.remove('hot'));
+        const open = () => {
+          if (performance.now() < shelf.noClickUntil) return;
+          openCard(m, labels[i]);
+        };
+        el.addEventListener('click', open);
+        el.addEventListener('keydown', (ev) => {
+          if (ev.key === 'Enter' || ev.key === ' ') {
+            ev.preventDefault();
+            open();
+          }
+        });
+      });
+      return g;
+    }
+
+    // Blank spines on the left face: decoration only, shown when there is more than one rotation position.
+    function buildDeco(parent) {
+      const g = svgEl('g', { class: 'dlayer' }, parent);
+      g.style.filter = 'brightness(.72)';
+      const [SW, SH] = SHELF.spine;
+      SHELF.leftQuads.forEach((q, i) => {
+        const tpl = TEMPLATES[hashId(`${shelf.page}:${i}`) % TEMPLATES.length];
+        const el = svgEl('g', { transform: quadMatrix(q) }, g);
+        svgEl('image', { href: `/a/spine_${tpl}.jpg`, width: SW, height: SH }, el);
+      });
+      return g;
+    }
+
+    function finishTurn() {
+      shelf.anim.forEach((a) => a.cancel());
+      shelf.anim = [];
+      document.querySelectorAll('#tapes > g.layer.out, #deco > g.dlayer.out').forEach((n) => n.remove());
+      document.querySelectorAll('#tapes > g.layer, #deco > g.dlayer').forEach((n) => {
+        n.classList.remove('in');
+        n.style.cssText = n.classList.contains('dlayer') ? 'filter:brightness(.72)' : '';
+      });
+    }
+
+    // dir: +1 turn right, -1 turn left, 0 redraw without animation
+    function renderShelf(dir) {
+      finishTurn();
+      const tapes = $('tapes');
+      const deco = $('deco');
+      const pages = pagesCount();
+      shelf.page = Math.min(shelf.page, pages - 1);
+      const focusSlot = $('shelf').contains(document.activeElement) && document.activeElement.dataset
+        ? document.activeElement.dataset.slot : undefined;
+      const oldLayers = [...tapes.querySelectorAll(':scope > g.layer')];
+      const oldDeco = [...deco.querySelectorAll(':scope > g.dlayer')];
+      const layer = buildLayer(tapes);
+      const dl = pages > 1 ? buildDeco(deco) : null;
+      const animate = dir !== 0 && !motionOff() && oldLayers.length > 0;
+      const opts = { duration: TURN_MS, easing: 'ease-in-out', fill: 'both' };
+      const done = () => {
+        finishTurn();
+        fitAll();
+      };
+      if (animate) {
+        oldLayers.forEach((n) => {
+          n.classList.add('out');
+          n.setAttribute('aria-hidden', 'true');
+          n.style.pointerEvents = 'none';
+          n.querySelectorAll('.tape').forEach((t) => t.removeAttribute('tabindex'));
+          shelf.anim.push(n.animate([{ transform: 'translateX(0px)', opacity: 1 }, { transform: `translateX(${dir * TURN_DX}px)`, opacity: 0 }], opts));
+        });
+        layer.classList.add('in');
+        const inAnim = layer.animate([{ transform: `translateX(${-dir * TURN_DX}px)`, opacity: 0 }, { transform: 'translateX(0px)', opacity: 1 }], opts);
+        shelf.anim.push(inAnim);
+        oldDeco.forEach((n) => {
+          n.classList.add('out');
+          shelf.anim.push(n.animate([{ opacity: 1 }, { opacity: 0 }], opts));
+        });
+        if (dl) {
+          dl.classList.add('in');
+          shelf.anim.push(dl.animate([{ opacity: 0 }, { opacity: 1 }], opts));
+        }
+        inAnim.finished.then(done, () => {});
+      } else {
+        oldLayers.forEach((n) => n.remove());
+        oldDeco.forEach((n) => n.remove());
+      }
+      fitAll();
+      const pager = $('pager');
+      pager.hidden = pages <= 1;
+      $('pg-n').textContent = `${shelf.page + 1} / ${pages}`;
+      if (focusSlot !== undefined) {
+        const mine = [...layer.querySelectorAll('.tape')];
+        const t = mine.find((n) => n.dataset.slot === focusSlot) || mine[0];
+        if (t) t.focus({ preventScroll: true });
+        else if (!pager.hidden) $('pg-next').focus({ preventScroll: true });
+      }
+    }
+
+    function syncShelf() {
+      if (!shelf.ready) return;
+      const key = `${mode}|${deckId()}|${shelf.ver}|${shelf.page}`;
+      if (key === shelf.key) return;
+      shelf.key = key;
+      renderShelf(0);
+    }
+
+    // dir: +1 turns right (next position), -1 turns left; wraps around at the ends
+    function turn(dir) {
+      const pages = pagesCount();
+      if (pages < 2) return;
+      shelf.page = (shelf.page + dir + pages) % pages;
+      shelf.key = `${mode}|${deckId()}|${shelf.ver}|${shelf.page}`;
+      renderShelf(dir);
+    }
+
+    async function loadMixes() {
+      try {
+        const res = await fetch('/api/mixes', { cache: 'no-store', credentials: 'same-origin' });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const d = await res.json();
+        const list = Array.isArray(d && d.mixes) ? d.mixes : [];
+        shelf.mixes = list.filter((m) => m && typeof m.id === 'string' && m.mix && typeof m.mix === 'object');
+        shelf.ver++;
+      } catch (e) {
+        return;
+      }
+      syncShelf();
+    }
+
+    shelf.noClickUntil = 0;
+    $('pg-prev').addEventListener('click', () => turn(-1));
+    $('pg-next').addEventListener('click', () => turn(1));
+    $('shelf').addEventListener('keydown', (ev) => {
+      if (ev.altKey || ev.ctrlKey || ev.metaKey || ev.shiftKey) return;
+      if (ev.key === 'ArrowLeft') {
+        ev.preventDefault();
+        turn(-1);
+      } else if (ev.key === 'ArrowRight') {
+        ev.preventDefault();
+        turn(1);
+      }
+    });
+
+    // Horizontal swipe on touch: content follows the finger (swipe right = turn right).
+    const swipe = { id: null, x: 0, y: 0 };
+    $('rack').addEventListener('pointerdown', (ev) => {
+      if (ev.pointerType === 'mouse' || !ev.isPrimary) return;
+      swipe.id = ev.pointerId;
+      swipe.x = ev.clientX;
+      swipe.y = ev.clientY;
+    });
+    $('rack').addEventListener('pointerup', (ev) => {
+      if (ev.pointerId !== swipe.id) return;
+      swipe.id = null;
+      const dx = ev.clientX - swipe.x;
+      const dy = ev.clientY - swipe.y;
+      if (Math.abs(dx) > 40 && Math.abs(dx) > Math.abs(dy) * 1.5) {
+        shelf.noClickUntil = performance.now() + 400;
+        turn(dx > 0 ? 1 : -1);
+      }
+    });
+    $('rack').addEventListener('pointercancel', () => {
+      swipe.id = null;
+    });
+
+    // ---- tape popup (a J-card) ------------------------------------------------------------
+
+    const card = $('card');
+    const cardState = { id: null, mix: null, tracks: [], token: 0, noFocus: false };
+
+    function openCard(m, label) {
+      const mix = m.mix;
+      cardState.id = m.id;
+      cardState.mix = mix;
+      cardState.tracks = tracksOf(mix);
+      cardState.noFocus = false;
+      $('card-title').textContent = label;
+      const n = cardState.tracks.length;
+      $('card-meta').textContent = [dateOf(mix), minutesOf(mix), n ? `${n} track${n === 1 ? '' : 's'}` : ''].filter(Boolean).join(' · ');
+      const ol = $('card-tracks');
+      ol.replaceChildren();
+      cardState.tracks.forEach((t, i) => {
+        const li = document.createElement('li');
+        const no = document.createElement('span');
+        no.className = 'tn';
+        no.textContent = String(i + 1);
+        const tm = document.createElement('span');
+        tm.className = 'tm';
+        tm.textContent = fmt(t.start_seconds);
+        const tx = document.createElement('span');
+        tx.textContent = [t.artist, t.title].filter(Boolean).join(' - ') || 'Unknown track';
+        li.append(no, tm, tx);
+        ol.appendChild(li);
+      });
+      ol.hidden = !n;
+      const go = $('card-go');
+      go.disabled = true;
+      $('card-note').textContent = '';
+      card.showModal();
+      go.blur();
+      const token = ++cardState.token;
+      const failed = () => {
+        if (token === cardState.token && card.open) $('card-note').textContent = 'Tape not ready yet';
+      };
+      fetch(tapeUrl(m.id), { method: 'HEAD', credentials: 'same-origin' }).then((r) => {
+        if (token !== cardState.token || !card.open) return;
+        if (r.ok) go.disabled = false;
+        else failed();
+      }, failed);
+    }
+
+    card.addEventListener('click', (ev) => {
+      if (ev.target === card) card.close();
+    });
+    $('card-cancel').addEventListener('click', () => card.close());
+
+    const help = $('help');
+    $('help-btn').addEventListener('click', () => help.showModal());
+    $('help-close').addEventListener('click', () => help.close());
+    help.addEventListener('click', (ev) => {
+      if (ev.target === help) help.close();
+    });
+    card.addEventListener('close', () => {
+      cardState.token++;
+      if (cardState.noFocus) return;
+      const el = [...document.querySelectorAll('#tapes .tape')].find((t) => t.dataset.id === cardState.id);
+      if (el) el.focus();
+    });
+
+    // Runs inside the click (iOS needs the gesture for play()).
+    $('card-go').addEventListener('click', () => {
+      if ($('card-go').disabled) return;
+      cardState.noFocus = true;
+      card.close();
+      deckChange(deckLabel(cardState.mix, cardState.id, cardState.tracks));
+      keyClick();
+      endWind(false);
+      setMusic(true);
+      if (!playing) begin();
+      else if (paused) {
+        paused = false;
+        syncKeys();
+      }
+      enterTape(cardState.id, cardState.mix, cardState.tracks, 0);
+      setStatus('');
+      render();
+    });
+
+    initShelf();
+    shelf.ready = true;
+    loadMixes();
+    setInterval(loadMixes, 300000);
+
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden) {
+        load();
+        loadMixes();
+      }
+    });
+
+    load();
+    setInterval(load, 30000);
+    setInterval(render, 1000);
+
+    // Phones: show only the centre unit (dial, knobs, decks, keys), about twice as large.
+    const narrow = window.matchMedia('(max-width: 700px)');
+    const fitBox = () => $('box').setAttribute('viewBox', narrow.matches ? '490 100 960 620' : '0 0 1920 768');
+    narrow.addEventListener('change', fitBox);
+    fitBox();

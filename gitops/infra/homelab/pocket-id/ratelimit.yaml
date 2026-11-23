@@ -1,0 +1,62 @@
+---
+# Per-client-IP local limits. sourceCIDR is matched against the TCP peer, not
+# X-Forwarded-For, so it cannot be spoofed. Only one path and one sourceCIDR
+# fit in a rule, hence one rule per path. Rules without clientSelectors are
+# avoided: they would become one shared bucket for all clients.
+# Envoy's own OIDC token call (hairpin via the LB IP, seen as 10.42.x.1) is
+# excluded from every rule by inverting the pod CIDR.
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: BackendTrafficPolicy
+metadata:
+  name: pocket-id-ratelimit
+  namespace: pocket-id
+spec:
+  targetRefs:
+    - group: gateway.networking.k8s.io
+      kind: HTTPRoute
+      name: pocket-id
+  rateLimit:
+    type: Local
+    local:
+      rules:
+        - clientSelectors:
+            - path:
+                type: PathPrefix
+                value: /api/webauthn/
+              sourceCIDR:
+                type: Distinct
+                value: 10.42.0.0/16
+                invert: true
+          limit:
+            requests: 30
+            unit: Minute
+        - clientSelectors:
+            - path:
+                type: PathPrefix
+                value: /authorize
+              sourceCIDR:
+                type: Distinct
+                value: 10.42.0.0/16
+                invert: true
+          limit:
+            requests: 30
+            unit: Minute
+        - clientSelectors:
+            - path:
+                type: Exact
+                value: /api/oidc/token
+              sourceCIDR:
+                type: Distinct
+                value: 10.42.0.0/16
+                invert: true
+          limit:
+            requests: 30
+            unit: Minute
+        - clientSelectors:
+            - sourceCIDR:
+                type: Distinct
+                value: 10.42.0.0/16
+                invert: true
+          limit:
+            requests: 300
+            unit: Minute
